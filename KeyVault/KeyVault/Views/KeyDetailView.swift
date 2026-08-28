@@ -157,6 +157,17 @@ struct KeyDetailView: View {
             return "Age key deletion is not supported. Please edit the key file manually."
         case .api:
             return "This will delete the API key from the Keychain. This cannot be undone."
+        case .note:
+            // Stated plainly because notes are the one type with no copy
+            // anywhere else: SSH/GPG/Age index files that still exist on disk,
+            // and an API key can usually be re-issued. This is the real thing.
+            return """
+                This will permanently delete this note from the Keychain. \
+                Nothing else holds a copy of it, and it cannot be undone.
+
+                If you have not exported an encrypted backup, cancel and do \
+                that first.
+                """
         }
     }
 

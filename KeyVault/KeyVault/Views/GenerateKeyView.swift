@@ -31,7 +31,7 @@ struct GenerateKeyView: View {
         VStack(spacing: 0) {
             Form {
                 Picker("Key Type", selection: $selectedType) {
-                    ForEach(KeyType.allCases.filter { $0 != .api }, id: \.self) { type in
+                    ForEach(KeyType.allCases.filter { !SecretStore.ownedTypes.contains($0) }, id: \.self) { type in
                         Text(type.rawValue).tag(type)
                     }
                 }
@@ -45,7 +45,8 @@ struct GenerateKeyView: View {
                     gpgForm
                 case .age:
                     ageForm
-                case .api:
+                case .api, .note:
+                    // Stored, not generated — filtered out of the picker above.
                     EmptyView()
                 }
             }
@@ -122,7 +123,7 @@ struct GenerateKeyView: View {
         case .ssh: return !sshPath.isEmpty
         case .gpg: return !gpgName.isEmpty && !gpgEmail.isEmpty
         case .age: return !agePath.isEmpty
-        case .api: return false
+        case .api, .note: return false
         }
     }
 
@@ -149,7 +150,7 @@ struct GenerateKeyView: View {
                 )
             case .age:
                 try await viewModel.generateAgeKey(outputPath: agePath)
-            case .api:
+            case .api, .note:
                 break
             }
             dismiss()

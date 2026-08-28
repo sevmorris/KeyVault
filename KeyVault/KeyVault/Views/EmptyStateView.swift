@@ -36,6 +36,7 @@ struct EmptyStateView: View {
         case .gpg: return "No GPG keys found.\nMake sure gpg is installed and keys are in your keyring."
         case .age: return "No Age keys found at configured paths.\nGenerate a key or update paths in Settings."
         case .api: return "No API keys stored.\nUse the + button to add an API key."
+        case .note: return "No notes stored.\nUse the + button to add a secret note."
         }
     }
 }

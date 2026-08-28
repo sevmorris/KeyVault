@@ -44,7 +44,7 @@ final class KeyVaultViewModel {
         async let sshKeys = loadSSH()
         async let gpgKeys = loadGPG()
         async let ageKeys = loadAge()
-        let apiKeys = APIKeyService.loadAll()
+        let apiKeys = SecretStore.loadAll()
 
         let (ssh, gpg, age) = await (sshKeys, gpgKeys, ageKeys)
         allKeys = ssh + gpg + age + apiKeys
@@ -89,6 +89,10 @@ final class KeyVaultViewModel {
     func copyPublicKey(_ key: EncryptionKey) {
         let text: String
         switch key.type {
+        case .note:
+            // Notes have no public half. The secret itself is copied from the
+            // detail view, deliberately never from a list action.
+            return
         case .ssh:
             text = key.publicKey ?? ""
         case .gpg:
@@ -121,6 +125,8 @@ final class KeyVaultViewModel {
 
     func deleteKey(_ key: EncryptionKey) async throws {
         switch key.type {
+        case .note:
+            try SecretStore.delete(id: key.id)
         case .ssh:
             if let path = key.path {
                 try FileManager.default.removeItem(atPath: path)
@@ -134,7 +140,7 @@ final class KeyVaultViewModel {
         case .age:
             break // Age key deletion not supported — managed via key files
         case .api:
-            try APIKeyService.delete(id: key.id)
+            try SecretStore.delete(id: key.id)
         }
         await reload()
     }
@@ -167,8 +173,8 @@ final class KeyVaultViewModel {
     }
 
     func addAPIKey(key: EncryptionKey, secret: String) throws {
-        try APIKeyService.save(key: key, secret: secret)
-        let apiKeys = APIKeyService.loadAll()
+        try SecretStore.save(key, secret: secret)
+        let apiKeys = SecretStore.loadAll()
         allKeys.removeAll { $0.type == .api }
         allKeys.append(contentsOf: apiKeys)
     }
