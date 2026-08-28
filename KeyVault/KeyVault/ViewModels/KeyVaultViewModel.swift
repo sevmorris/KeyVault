@@ -11,11 +11,14 @@ final class KeyVaultViewModel {
     var showGenerateSheet = false
     var showImportSheet = false
     var showAddAPIKeySheet = false
+    var showAddNoteSheet = false
+    var showBackupSheet = false
     var showSettings = false
     var settings: AppSettings
     var errorMessage: String? = nil
 
     private let shell = ShellService()
+    private let exportService = VaultExportService()
     private let sshService = SSHService()
     private let gpgService = GPGService()
     private let ageService = AgeService()
@@ -44,10 +47,10 @@ final class KeyVaultViewModel {
         async let sshKeys = loadSSH()
         async let gpgKeys = loadGPG()
         async let ageKeys = loadAge()
-        let apiKeys = SecretStore.loadAll()
+        let stored = SecretStore.loadAll()
 
         let (ssh, gpg, age) = await (sshKeys, gpgKeys, ageKeys)
-        allKeys = ssh + gpg + age + apiKeys
+        allKeys = ssh + gpg + age + stored
         isLoading = false
     }
 
@@ -174,9 +177,44 @@ final class KeyVaultViewModel {
 
     func addAPIKey(key: EncryptionKey, secret: String) throws {
         try SecretStore.save(key, secret: secret)
-        let apiKeys = SecretStore.loadAll()
-        allKeys.removeAll { $0.type == .api }
-        allKeys.append(contentsOf: apiKeys)
+        refreshStoredSecrets()
+    }
+
+    func addNote(name: String, secret: String, notes: String?) async {
+        let key = EncryptionKey(
+            type: .note,
+            name: name,
+            notes: notes,
+            createdDate: Date(),
+            hasPrivateKey: false
+        )
+        do {
+            try SecretStore.save(key, secret: secret)
+            refreshStoredSecrets()
+        } catch {
+            await appendError("Note: \(error.localizedDescription)")
+        }
+    }
+
+    /// Replace every stored-secret row in one go. Removing by a single type
+    /// and re-appending the whole store duplicated the other one — the store
+    /// owns more than API keys now, so the removal has to own the same set.
+    private func refreshStoredSecrets() {
+        allKeys.removeAll { SecretStore.ownedTypes.contains($0.type) }
+        allKeys.append(contentsOf: SecretStore.loadAll())
+    }
+
+    // MARK: - Backup
+
+    func exportVault(passphrase: String) async throws -> String {
+        try await exportService.exportArchive(passphrase: passphrase)
+    }
+
+    func importVault(armored: String, passphrase: String) async throws -> (added: Int, updated: Int) {
+        let archive = try await exportService.readArchive(armored: armored, passphrase: passphrase)
+        let counts = try await exportService.restore(archive)
+        refreshStoredSecrets()
+        return counts
     }
 
     func importKey(from url: URL) async throws {

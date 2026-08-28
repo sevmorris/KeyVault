@@ -24,6 +24,12 @@ struct ContentView: View {
         .sheet(isPresented: $viewModel.showAddAPIKeySheet) {
             AddAPIKeyView(viewModel: viewModel)
         }
+        .sheet(isPresented: $viewModel.showAddNoteSheet) {
+            AddNoteView(viewModel: viewModel)
+        }
+        .sheet(isPresented: $viewModel.showBackupSheet) {
+            BackupView(viewModel: viewModel)
+        }
         .sheet(isPresented: $viewModel.showSettings) {
             SettingsView(viewModel: viewModel)
         }

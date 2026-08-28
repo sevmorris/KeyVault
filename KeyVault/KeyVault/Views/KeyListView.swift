@@ -29,6 +29,15 @@ struct KeyListView: View {
                     .help("Add API Key")
                 }
 
+                if viewModel.selectedType == .note || viewModel.selectedType == nil {
+                    Button {
+                        viewModel.showAddNoteSheet = true
+                    } label: {
+                        Label("Add Note", systemImage: "doc.badge.plus")
+                    }
+                    .help("Add Note")
+                }
+
                 Button {
                     viewModel.showImportSheet = true
                 } label: {
