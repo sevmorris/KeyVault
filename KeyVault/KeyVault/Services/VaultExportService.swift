@@ -15,13 +15,9 @@ import Foundation
 /// which a binary blob does reliably.
 actor VaultExportService {
     private let shell = ShellService()
-    private static let gpgPaths = ["/opt/homebrew/bin/gpg", "/usr/local/bin/gpg", "/usr/bin/gpg"]
 
     private func gpgPath() throws -> String {
-        guard let path = Self.gpgPaths.first(where: { FileManager.default.fileExists(atPath: $0) }) else {
-            throw KeyError.toolNotFound("gpg")
-        }
-        return path
+        try GPGLocator.resolve()
     }
 
     // MARK: - Export
@@ -140,13 +136,21 @@ actor VaultExportService {
     /// Write an archive's items into the store. Existing ids are updated rather
     /// than duplicated, so re-importing the same archive is idempotent — which
     /// is what makes a restore drill safe to rehearse.
-    func restore(_ archive: VaultArchive) throws -> (added: Int, updated: Int) {
+    ///
+    /// Anything this build does not recognise is counted and reported rather
+    /// than dropped quietly. The export half of this file refuses to omit a
+    /// single secret on the grounds that a backup with a silent gap is worse
+    /// than none; a restore that silently declines to write one is the same
+    /// bargain, and the user is equally entitled to hear about it.
+    func restore(_ archive: VaultArchive) throws -> (added: Int, updated: Int, skipped: Int) {
         let existing = Set(SecretStore.loadAll().map(\.id))
         var added = 0
         var updated = 0
+        var skipped = 0
 
         for item in archive.items {
             guard let type = KeyType(rawValue: item.type), SecretStore.ownedTypes.contains(type) else {
+                skipped += 1
                 continue
             }
             let key = EncryptionKey(
@@ -166,7 +170,7 @@ actor VaultExportService {
                 added += 1
             }
         }
-        return (added, updated)
+        return (added, updated, skipped)
     }
 
     // MARK: - Helpers

@@ -30,6 +30,29 @@ struct VaultArchive: Codable {
     var exportedAt: Date
     var items: [Item]
 
+    init(exportedAt: Date, items: [Item]) {
+        self.exportedAt = exportedAt
+        self.items = items
+    }
+
+    /// Written out because synthesized `Codable` ignores property defaults: it
+    /// treats every key as required and throws on a document that omits one,
+    /// defaults or no defaults. That is the wrong failure for this file. The
+    /// archive exists to be legible and editable outside KeyVault, so someone
+    /// who trims the embedded instructions out of their own backup — the one
+    /// field that is pure prose — must still be able to restore it.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        formatVersion = try container.decodeIfPresent(Int.self, forKey: .formatVersion)
+            ?? Self.currentFormatVersion
+        readme = try container.decodeIfPresent(String.self, forKey: .readme)
+            ?? Self.readmeText
+        // Required: an archive with no items, or no record of when it was
+        // written, is not an archive this should silently accept.
+        exportedAt = try container.decode(Date.self, forKey: .exportedAt)
+        items = try container.decode([Item].self, forKey: .items)
+    }
+
     struct Item: Codable {
         var id: UUID
         /// `KeyType` raw value — "Note" or "API Key".

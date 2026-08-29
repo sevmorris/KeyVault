@@ -222,7 +222,7 @@ final class KeyVaultViewModel {
         try await exportService.exportArchive(passphrase: passphrase)
     }
 
-    func importVault(armored: String, passphrase: String) async throws -> (added: Int, updated: Int) {
+    func importVault(armored: String, passphrase: String) async throws -> (added: Int, updated: Int, skipped: Int) {
         let archive = try await exportService.readArchive(armored: armored, passphrase: passphrase)
         let counts = try await exportService.restore(archive)
         refreshStoredSecrets()

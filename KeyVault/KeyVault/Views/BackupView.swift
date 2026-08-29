@@ -113,7 +113,16 @@ struct BackupView: View {
             do {
                 let armored = try String(contentsOf: url, encoding: .utf8)
                 let counts = try await viewModel.importVault(armored: armored, passphrase: passphrase)
-                status = "Restored: \(counts.added) added, \(counts.updated) updated."
+                var summary = "Restored: \(counts.added) added, \(counts.updated) updated."
+                if counts.skipped > 0 {
+                    // Named, not buried: an item this build cannot store is
+                    // still in the archive, and the archive is still the copy
+                    // that has it.
+                    summary += " \(counts.skipped) item\(counts.skipped == 1 ? "" : "s") "
+                        + "skipped — this version of KeyVault does not recognise "
+                        + "their type. Keep this archive."
+                }
+                status = summary
             } catch {
                 errorMessage = error.localizedDescription
             }
