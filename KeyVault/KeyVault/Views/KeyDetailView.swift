@@ -136,7 +136,11 @@ struct KeyDetailView: View {
     private func copySecret() {
         guard let secret = revealedSecret else { return }
         let pb = NSPasteboard.general
-        pb.clearContents()
+        // .currentHostOnly keeps this off Universal Clipboard. A plain
+        // clearContents() leaves the secret eligible for Handoff, which would
+        // put it on every other Mac, iPhone and iPad signed into the account —
+        // rather more copies than "copy" implies.
+        pb.prepareForNewContents(with: .currentHostOnly)
         // Tells clipboard managers not to archive this. Not enforceable — a
         // manager can ignore it — but the ones worth using honour it, and
         // silently seeding a searchable history with vault contents is worse
@@ -145,15 +149,20 @@ struct KeyDetailView: View {
         pb.setString(secret, forType: .string)
 
         copiedSecret = true
-        // Clear the clipboard afterwards, but only if it still holds this
-        // secret — stomping on whatever the user copied since would be its own
-        // small betrayal.
         Task {
-            try? await Task.sleep(for: .seconds(45))
+            // The label reverts on a human timescale. Tying it to the clipboard
+            // clear below meant "Copied" stuck for 45 seconds, and since the
+            // button is disabled while it shows, so did the button.
+            try? await Task.sleep(for: .seconds(2))
+            copiedSecret = false
+
+            // Then clear the clipboard, but only if it still holds this secret
+            // — stomping on whatever the user copied since would be its own
+            // small betrayal.
+            try? await Task.sleep(for: .seconds(43))
             if NSPasteboard.general.string(forType: .string) == secret {
                 NSPasteboard.general.clearContents()
             }
-            copiedSecret = false
         }
     }
 

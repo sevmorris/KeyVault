@@ -75,7 +75,10 @@ struct BackupView: View {
             HStack {
                 if isWorking { ProgressView().controlSize(.small) }
                 Spacer()
-                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+                // Escape, not Return. As the default action this button
+                // swallowed the Return keypress that ends typing a passphrase,
+                // closing the sheet instead of exporting anything.
+                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
             }
             .padding()
         }
