@@ -5,7 +5,10 @@ import AppKit
 @MainActor
 final class KeyVaultViewModel {
     var allKeys: [EncryptionKey] = []
-    var selectedType: KeyType? = nil
+    /// Opens on notes rather than on everything. The key types are an
+    /// inventory of things other tools own; the stored secrets are what this
+    /// app is for, and a flat list of all five buried them.
+    var selectedType: KeyType? = .note
     var selectedKeyID: UUID? = nil
     var isLoading = false
     var showGenerateSheet = false
