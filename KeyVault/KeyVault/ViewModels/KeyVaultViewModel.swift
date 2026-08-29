@@ -17,7 +17,6 @@ final class KeyVaultViewModel {
     var settings: AppSettings
     var errorMessage: String? = nil
 
-    private let shell = ShellService()
     private let exportService = VaultExportService()
     private let sshService = SSHService()
     private let gpgService = GPGService()
@@ -131,17 +130,36 @@ final class KeyVaultViewModel {
         case .note:
             try SecretStore.delete(id: key.id)
         case .ssh:
+            // An entry can exist on the strength of its .pub alone, and the
+            // private half is then simply not there. Removing the missing file
+            // used to throw, so those rows could never be deleted at all.
             if let path = key.path {
-                try FileManager.default.removeItem(atPath: path)
+                let fm = FileManager.default
                 let pubPath = path + ".pub"
-                try? FileManager.default.removeItem(atPath: pubPath)
+                var removed = false
+                for candidate in [path, pubPath] where fm.fileExists(atPath: candidate) {
+                    try fm.removeItem(atPath: candidate)
+                    removed = true
+                }
+                guard removed else {
+                    throw KeyError.deleteFailed(
+                        "Neither \(path) nor \(pubPath) is on disk any more."
+                    )
+                }
             }
         case .gpg:
             if let keyID = key.keyID {
                 try await gpgService.deleteKey(keyID, includeSecret: key.hasPrivateKey)
             }
         case .age:
-            break // Age key deletion not supported — managed via key files
+            // Deleting one identity out of a shared key file is a text edit,
+            // not a file removal, and guessing at it risks taking the rest of
+            // the file with it. Say so rather than run the destructive
+            // confirmation and then quietly do nothing.
+            throw KeyError.deleteFailed(
+                "Age keys live in a key file that may hold others. "
+                + "Remove this identity from \(key.path ?? "the key file") by hand."
+            )
         case .api:
             try SecretStore.delete(id: key.id)
         }
