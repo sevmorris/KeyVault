@@ -15,6 +15,12 @@ import UniformTypeIdentifiers
 /// value nothing else holds a copy of, proof-reading is the point.
 struct AddNoteView: View {
     let viewModel: KeyVaultViewModel
+
+    /// The note being edited, or nil when adding a new one. The same form
+    /// serves both: an edit asks exactly the questions an add does, and a
+    /// second near-identical view would be two places to fix every bug.
+    var editing: EncryptionKey? = nil
+
     @Environment(\.dismiss) private var dismiss
 
     @State private var name = ""
@@ -24,13 +30,24 @@ struct AddNoteView: View {
     @State private var importError: String?
     @State private var isSaving = false
 
+    /// Set when an existing note's secret could not be read back. Save stays
+    /// disabled while it is non-nil: writing the empty editor over a note
+    /// whose ciphertext is merely unreadable right now would turn a temporary
+    /// Keychain failure into the permanent loss of the only copy.
+    @State private var loadError: String?
+    @State private var didLoad = false
+
+    private var isEditing: Bool { editing != nil }
+
     private var isValid: Bool {
-        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !secret.isEmpty
+        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !secret.isEmpty
+            && loadError == nil
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Add Note")
+            Text(isEditing ? "Edit Note" : "Add Note")
                 .font(.headline)
                 .padding([.top, .horizontal])
 
@@ -61,6 +78,13 @@ struct AddNoteView: View {
             }
             .formStyle(.grouped)
 
+            if let loadError {
+                Text(loadError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .padding(.horizontal)
+            }
+
             if let importError {
                 Text(importError)
                     .font(.caption)
@@ -78,6 +102,7 @@ struct AddNoteView: View {
             .padding()
         }
         .frame(width: 460, height: 480)
+        .task { loadExistingNote() }
         .fileImporter(
             isPresented: $isImporting,
             allowedContentTypes: [.plainText, .json, .data],
@@ -116,16 +141,46 @@ struct AddNoteView: View {
         }
     }
 
+    /// Fill the form from the note being edited. Runs once: `.task` fires
+    /// again if the view is reidentified, and re-reading would throw away
+    /// edits already typed into the fields.
+    private func loadExistingNote() {
+        guard let editing, !didLoad else { return }
+        didLoad = true
+        name = editing.name
+        notes = editing.notes ?? ""
+        do {
+            secret = try SecretStore.loadSecret(for: editing.id)
+        } catch {
+            loadError = "Could not read this note from the Keychain: "
+                + "\(error.localizedDescription) — close and try again rather "
+                + "than saving, which would overwrite it."
+        }
+    }
+
     private func save() {
         isSaving = true
         Task {
-            await viewModel.addNote(
-                name: name.trimmingCharacters(in: .whitespacesAndNewlines),
-                secret: secret,
-                notes: notes.isEmpty ? nil : notes
-            )
+            let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedNotes = notes.isEmpty ? nil : notes
+            let saved: Bool
+            if let editing {
+                saved = await viewModel.updateNote(
+                    editing,
+                    name: trimmedName,
+                    secret: secret,
+                    notes: trimmedNotes
+                )
+            } else {
+                saved = await viewModel.addNote(
+                    name: trimmedName,
+                    secret: secret,
+                    notes: trimmedNotes
+                )
+            }
             isSaving = false
-            dismiss()
+            // Only on success. A dismissed sheet takes the typed text with it.
+            if saved { dismiss() }
         }
     }
 }

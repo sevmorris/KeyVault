@@ -4,6 +4,7 @@ struct KeyDetailView: View {
     @Bindable var viewModel: KeyVaultViewModel
     let key: EncryptionKey
     @State private var showDeleteConfirm = false
+    @State private var showEditNote = false
     @State private var deleteError: String?
     @State private var copied = false
 
@@ -40,6 +41,16 @@ struct KeyDetailView: View {
             revealedSecret = nil
             secretError = nil
             copiedSecret = false
+        }
+        .sheet(isPresented: $showEditNote) {
+            // A saved edit replaces the stored secret, so anything revealed
+            // before it is now stale. Drop it rather than leave the old value
+            // sitting on screen looking current.
+            revealedSecret = nil
+            secretError = nil
+            copiedSecret = false
+        } content: {
+            AddNoteView(viewModel: viewModel, editing: key)
         }
         .alert("Delete Key?", isPresented: $showDeleteConfirm) {
             Button("Delete", role: .destructive) {
@@ -160,6 +171,19 @@ struct KeyDetailView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            // Notes are the only type KeyVault stores outright, so they are
+            // the only one it can rewrite. SSH and GPG entries are a view onto
+            // files and a keyring that their own tools own; Age is dormant.
+            if key.type == .note {
+                Button {
+                    showEditNote = true
+                } label: {
+                    Label("Edit", systemImage: "pencil")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Edit this note")
+            }
         }
     }
 

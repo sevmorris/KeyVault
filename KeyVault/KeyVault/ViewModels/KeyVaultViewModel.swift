@@ -210,7 +210,11 @@ final class KeyVaultViewModel {
         refreshStoredSecrets()
     }
 
-    func addNote(name: String, secret: String, notes: String?) async {
+    /// Reports whether the write landed. The editor keeps what was typed when
+    /// this is false: a note is the one type nothing else holds a copy of, so
+    /// closing the sheet over a failed save discards the only copy there is.
+    @discardableResult
+    func addNote(name: String, secret: String, notes: String?) async -> Bool {
         let key = EncryptionKey(
             type: .note,
             name: name,
@@ -221,8 +225,32 @@ final class KeyVaultViewModel {
         do {
             try SecretStore.save(key, secret: secret)
             refreshStoredSecrets()
+            return true
         } catch {
             await appendError("Note: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    /// Edit a stored note in place.
+    ///
+    /// The id is carried over rather than minted fresh, which is what makes an
+    /// edit an edit: the Keychain item is updated, the row keeps its identity,
+    /// and the selection survives a rename instead of the detail pane going
+    /// blank. `createdDate` rides along on the copy so the original stays the
+    /// creation date rather than becoming the last-edited date.
+    @discardableResult
+    func updateNote(_ key: EncryptionKey, name: String, secret: String, notes: String?) async -> Bool {
+        var edited = key
+        edited.name = name
+        edited.notes = notes
+        do {
+            try SecretStore.update(edited, newSecret: secret)
+            refreshStoredSecrets()
+            return true
+        } catch {
+            await appendError("Note: \(error.localizedDescription)")
+            return false
         }
     }
 
