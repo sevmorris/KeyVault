@@ -28,6 +28,17 @@ APP_PATH="$DERIVED_DATA/Build/Products/Release/KeyVault.app"
 STAGING="/tmp/keyvault_dmg_${VERSION}"
 DMG="/tmp/KeyVault-${TAG}.dmg"
 MOUNT="/tmp/keyvault_verify_${VERSION}"
+PBXPROJ="$PROJECT/project.pbxproj"
+README_MD="$PROJECT_DIR/README.md"
+MANUAL_IDX="$PROJECT_DIR/docs/manual/index.html"
+
+# Set while project.pbxproj carries an uncommitted version bump, and cleared
+# once that rewrite is committed. The EXIT trap reverts it in between.
+BUMP_ACTIVE=0
+
+# The same contract for the docs rewrite, one window later. A separate flag
+# because the two windows are disjoint and they revert different files.
+DOCS_ACTIVE=0
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 step()  { echo "\n▶ $*"; }
@@ -35,9 +46,29 @@ ok()    { echo "  ✓ $*"; }
 fail()  { echo "\n  ✗ $*" >&2; exit 1; }
 
 cleanup() {
-    rm -rf "$STAGING" "$MOUNT" "$DERIVED_DATA"
-    rm -f "$DMG"
+    # ${VAR:-} throughout so the trap fires cleanly even when the script exits
+    # before these are defined — an argument error, say. A bare (( BUMP_ACTIVE ))
+    # would trip `set -u` on exactly those early exits.
+    #
+    # The version bump is written to project.pbxproj before it is committed, so
+    # a failure in that window would otherwise strand it in the working tree,
+    # and the dirty-tree preflight then blocks the next run until someone
+    # reverts it by hand. Reverting the whole file is safe precisely because
+    # preflight proved the tree clean on entry: this script's own seds are the
+    # only changes present, so there is nothing else here to discard.
+    if (( ${BUMP_ACTIVE:-0} )); then
+        git -C "${PROJECT_DIR:-.}" checkout -- "${PBXPROJ:-}" 2>/dev/null || true
+    fi
+    if (( ${DOCS_ACTIVE:-0} )); then
+        git -C "${PROJECT_DIR:-.}" checkout -- \
+            "${README_MD:-}" "${MANUAL_IDX:-}" 2>/dev/null || true
+    fi
+    [[ -d "${STAGING:-}" ]]      && rm -rf -- "$STAGING"      || true
+    [[ -d "${MOUNT:-}" ]]        && rm -rf -- "$MOUNT"        || true
+    [[ -d "${DERIVED_DATA:-}" ]] && rm -rf -- "$DERIVED_DATA" || true
+    [[ -f "${DMG:-}" ]]          && rm -f  -- "$DMG"          || true
 }
+trap cleanup EXIT
 
 # ── Preflight ─────────────────────────────────────────────────────────────────
 step "Preflight checks"
@@ -61,26 +92,54 @@ if git tag | grep -q "^${TAG}$"; then
 fi
 ok "Tag $TAG is available"
 
-# Files marked "Shared verbatim across the sibling app repos" must not drift.
+# Absent siblings are not drift — a fresh clone or a CI checkout has none, and
+# the check passes quietly. Only a content mismatch stops the release.
+#
+# Worded to avoid quoting the registration marker itself: check-shared.sh finds
+# shared files by grepping for that phrase, so spelling it here would enrol this
+# script — which is app-specific and must never be compared across repos.
+step "Checking shared files against sibling repos"
 "$PROJECT_DIR/scripts/check-shared.sh" \
     || fail "Shared files have drifted from the sibling repos"
 
 # ── Version bump ──────────────────────────────────────────────────────────────
 step "Bumping version to $VERSION"
-PBXPROJ="$PROJECT_DIR/KeyVault/KeyVault.xcodeproj/project.pbxproj"
 # No Info.plist in this project — the version is a build setting, so the bump
 # edits project.pbxproj. Both configurations carry it; sed rewrites both.
 CURRENT=$(awk -F' = ' '/MARKETING_VERSION/ {gsub(/;/,"",$2); print $2; exit}' "$PBXPROJ")
+# Armed before the first mutation rather than after the last: the build-number
+# bump below reads through a pipeline that can abort under `set -o pipefail`
+# with the marketing-version sed already on disk.
+BUMP_ACTIVE=1
 if [[ "$CURRENT" == "$VERSION" ]]; then
     ok "Version already $VERSION"
 else
-    sed -i '' "s/MARKETING_VERSION = ${CURRENT};/MARKETING_VERSION = ${VERSION};/g" "$PBXPROJ"
+    # Escape regex metacharacters so a version like 1.7.0-rc.1 cannot make the
+    # dots match arbitrary characters.
+    ESC_CURRENT=$(printf '%s' "$CURRENT" | sed 's/[.[\*^$]/\\&/g')
+    ESC_VERSION=$(printf '%s' "$VERSION" | sed 's/[.[\*^$]/\\&/g')
+    sed -i '' "s/MARKETING_VERSION = ${ESC_CURRENT};/MARKETING_VERSION = ${ESC_VERSION};/g" "$PBXPROJ"
     NOW=$(awk -F' = ' '/MARKETING_VERSION/ {gsub(/;/,"",$2); print $2; exit}' "$PBXPROJ")
     [[ "$NOW" == "$VERSION" ]] || fail "Version bump did not take: still $NOW"
-    git add "$PBXPROJ"
-    git commit -m "Bump version to $VERSION"
     ok "Version $CURRENT → $VERSION"
 fi
+
+# CFBundleVersion has to increase for every build submitted under one marketing
+# version, and it had been pinned at 1 since the first release — so every
+# KeyVault ever shipped claimed to be build 1.
+BUILD_NUM=$(grep 'CURRENT_PROJECT_VERSION = ' "$PBXPROJ" | head -1 | grep -o '[0-9][0-9]*')
+NEXT_BUILD=$((BUILD_NUM + 1))
+sed -i '' "s/CURRENT_PROJECT_VERSION = ${BUILD_NUM};/CURRENT_PROJECT_VERSION = ${NEXT_BUILD};/g" "$PBXPROJ"
+ok "Build number ${BUILD_NUM} → ${NEXT_BUILD}"
+
+if [[ -n "$(git status --porcelain "$PBXPROJ")" ]]; then
+    git add "$PBXPROJ"
+    git commit -m "Bump version to $VERSION"
+    ok "Version bump committed"
+else
+    ok "Version already committed"
+fi
+BUMP_ACTIVE=0
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 step "Building (clean, Release)"
@@ -153,18 +212,38 @@ hdiutil detach "$MOUNT" -quiet
     fail "DMG version mismatch: expected $VERSION, got $DMG_VERSION"
 ok "DMG contains $DMG_VERSION"
 
-# ── Update docs (README) ─────────────────────────────────────────────────────
-step "Updating README to ${TAG}"
-sed -i '' "s|KeyVault-v[0-9][0-9.]*\.dmg|KeyVault-${TAG}.dmg|g" README.md
-sed -i '' "s|Download v[0-9][0-9.]*|Download ${TAG}|g" README.md
+# ── Update docs (README + manual) ─────────────────────────────────────────────
+step "Updating docs to ${TAG}"
+# Armed before the first sed, so a failure part-way through reverts the whole
+# set rather than leaving the README rewritten and the manual stale.
+DOCS_ACTIVE=1
 
-if [[ -n "$(git status --porcelain README.md)" ]]; then
-    git add README.md
-    git commit -m "docs: update download link to ${TAG}"
-    ok "README updated to ${TAG}"
-else
-    ok "README already up to date"
+# README: the download hyperlink, and the version label under the title. That
+# label was previously left behind — the link said v1.2.0 while the line above
+# it still said 1.1.0.
+sed -i '' "s|KeyVault-v[0-9][0-9.]*\.dmg|KeyVault-${TAG}.dmg|g" "$README_MD"
+sed -i '' "s|Download v[0-9][0-9.]*|Download ${TAG}|g" "$README_MD"
+sed -i '' "s|<strong>Version:</strong> [0-9][0-9.]*|<strong>Version:</strong> ${VERSION}|g" "$README_MD"
+sed -i '' "s|\*\*Version:\*\* [0-9][0-9.]*|**Version:** ${VERSION}|g" "$README_MD"
+
+# Manual: the version badge in the footer. docs/index.html is a bare redirect
+# to the manual and carries no version, so there is nothing to rewrite there.
+sed -i '' "s|Manual — v[0-9][0-9.]*|Manual — ${TAG}|g" "$MANUAL_IDX"
+
+# Nothing published should still name an older version.
+if grep -E "KeyVault-v[0-9]+\.[0-9]+[0-9.]*\.dmg" "$README_MD" "$MANUAL_IDX" \
+        | grep -v "${TAG}\.dmg" >/dev/null; then
+    fail "Stale version references remain after rewrite — check the sed patterns"
 fi
+
+if [[ -n "$(git status --porcelain "$README_MD" "$MANUAL_IDX")" ]]; then
+    git add "$README_MD" "$MANUAL_IDX"
+    git commit -m "docs: update download link to ${TAG}"
+    ok "Docs point to ${TAG}"
+else
+    ok "Docs already up to date"
+fi
+DOCS_ACTIVE=0
 
 # ── Tag and push ──────────────────────────────────────────────────────────────
 step "Tagging and pushing"
