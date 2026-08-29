@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KeyVault Manual</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;600;700&family=Barlow:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --black:     #0b1219;
+      --dark:      #121c25;
+      --mid:       #1a2733;
+      --light:     #eef4f8;
+      --cream:     #d8e4ec;
+      --muted:     #7f97a8;
+      --orange:    #f5861e;
+      --orange-lt: #ffa91a;
+      --border:    rgba(127,151,168,0.22);
+      --code-bg:   #0d151c;
+      --font-disp: 'Bebas Neue', 'Arial Narrow', sans-serif;
+      --font-ui:   'Barlow Condensed', 'Arial Narrow', sans-serif;
+      --font-body: 'Barlow', Arial, sans-serif;
+      --font-mono: 'SF Mono', 'Fira Mono', 'Menlo', monospace;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html { scroll-behavior: smooth; font-size: 16px; }
+
+    body {
+      font-family: var(--font-body);
+      background: var(--dark);
+      color: var(--light);
+      line-height: 1.6;
+      display: flex;
+      min-height: 100vh;
+    }
+
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
+      background-size: 180px 180px;
+      opacity: 0.035;
+      pointer-events: none;
+      z-index: 999;
+    }
+
+    /* ── Sidebar ── */
+    nav {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      width: 230px;
+      min-width: 230px;
+      background: var(--black);
+      border-right: 1px solid var(--border);
+      overflow-y: auto;
+      padding: 28px 0 40px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .nav-brand {
+      padding: 0 20px 20px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 16px;
+    }
+    .nav-brand span {
+      font-family: var(--font-ui);
+      font-weight: 700;
+      font-size: 1.6rem;
+      letter-spacing: 0.04em;
+      color: var(--light);
+      display: block;
+      line-height: 1.1;
+    }
+    .nav-brand small {
+      font-family: var(--font-ui);
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--orange);
+    }
+
+    nav a {
+      font-family: var(--font-ui);
+      display: block;
+      padding: 5px 20px;
+      font-size: 0.88rem;
+      color: var(--muted);
+      text-decoration: none;
+      border-left: 2px solid transparent;
+      transition: color 0.15s, border-color 0.15s;
+      line-height: 1.5;
+    }
+    nav a:hover {
+      color: var(--orange-lt);
+      border-left-color: var(--orange);
+      text-decoration: none;
+    }
+    nav a.section-head {
+      font-size: 0.7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--orange);
+      padding-top: 16px;
+      padding-bottom: 4px;
+      pointer-events: none;
+      border-left-color: transparent;
+    }
+    nav a.sub { padding-left: 32px; }
+
+    /* ── Main content ── */
+    main {
+      flex: 1;
+      max-width: 820px;
+      padding: 56px 48px 100px;
+      background: var(--dark);
+    }
+
+    section { margin-bottom: 64px; }
+
+    h1 {
+      font-family: var(--font-ui);
+      font-weight: 700;
+      font-size: clamp(2.5rem, 5vw, 4.5rem);
+      letter-spacing: 0.02em;
+      line-height: 1;
+      color: var(--light);
+      margin-bottom: 10px;
+    }
+    h2 {
+      font-family: var(--font-disp);
+      font-size: clamp(1.6rem, 2.5vw, 2.4rem);
+      letter-spacing: 0.02em;
+      line-height: 1;
+      color: var(--light);
+      margin-bottom: 16px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+    h3 {
+      font-family: var(--font-ui);
+      font-size: 1.1rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      color: var(--orange);
+      margin: 28px 0 10px;
+    }
+    h4 {
+      font-family: var(--font-ui);
+      font-size: 0.85rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--muted);
+      margin: 20px 0 8px;
+    }
+
+    p { margin-bottom: 14px; color: var(--cream); }
+    p:last-child { margin-bottom: 0; }
+
+    a { color: var(--orange); text-decoration: none; }
+    a:hover { color: var(--orange-lt); text-decoration: none; }
+
+    ul, ol { padding-left: 20px; margin-bottom: 14px; color: var(--cream); }
+    li { margin-bottom: 6px; line-height: 1.5; }
+    li:last-child { margin-bottom: 0; }
+
+    code {
+      font-family: var(--font-mono);
+      font-size: 0.84em;
+      background: var(--code-bg);
+      color: var(--cream);
+      padding: 2px 6px;
+      border-radius: 3px;
+      border: 1px solid var(--border);
+    }
+
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 16px 20px;
+      overflow-x: auto;
+      margin-bottom: 14px;
+    }
+    pre code { background: none; padding: 0; font-size: 0.85rem; border: none; }
+
+    .callout {
+      background: var(--mid);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--orange);
+      border-radius: 0;
+      padding: 14px 18px;
+      margin-bottom: 18px;
+      font-size: 0.9rem;
+    }
+    .callout-warn { border-left-color: #e6820a; }
+    .callout strong { display: block; margin-bottom: 4px; color: var(--orange); }
+
+    /* ── Hero ── */
+    .hero { margin-bottom: 56px; }
+    .hero h1 { margin-bottom: 12px; }
+    .hero p { font-size: 1.1rem; color: var(--cream); max-width: 560px; }
+    .hero-actions { display: flex; gap: 12px; margin-top: 24px; flex-wrap: wrap; align-items: center; }
+
+    .btn {
+      display: inline-block;
+      padding: 9px 20px;
+      font-family: var(--font-ui);
+      font-size: 0.9rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      text-decoration: none;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+    }
+    .btn:hover { text-decoration: none; }
+    .btn-primary {
+      background: var(--orange);
+      color: var(--black);
+    }
+    .btn-primary:hover { background: var(--orange-lt); color: var(--black); }
+    .btn-secondary {
+      background: var(--mid);
+      color: var(--light);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover { border-color: var(--orange); color: var(--orange); }
+
+    /* ── Settings table ── */
+    .settings-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+      margin-bottom: 14px;
+      border: 1px solid var(--border);
+      overflow: hidden;
+    }
+    .settings-table th {
+      text-align: left;
+      font-family: var(--font-ui);
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--muted);
+      background: var(--black);
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .settings-table td {
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+      color: var(--cream);
+    }
+    .settings-table tr:last-child td { border-bottom: none; }
+    .settings-table td:first-child { font-weight: 600; white-space: nowrap; color: var(--light); }
+    .settings-table td:nth-child(2) { color: var(--muted); white-space: nowrap; }
+
+    /* ── Pipeline steps ── */
+    .pipeline {
+      counter-reset: step;
+      list-style: none;
+      padding: 0;
+      margin-bottom: 14px;
+      color: var(--cream);
+    }
+    .pipeline li {
+      counter-increment: step;
+      display: flex;
+      gap: 16px;
+      align-items: flex-start;
+      margin-bottom: 16px;
+    }
+    .pipeline li::before {
+      content: counter(step);
+      min-width: 28px;
+      height: 28px;
+      background: var(--orange);
+      color: var(--black);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--font-ui);
+      font-size: 0.85rem;
+      font-weight: 700;
+      margin-top: 1px;
+      flex-shrink: 0;
+    }
+    .pipeline li div { flex: 1; }
+    .pipeline li strong { display: block; font-size: 0.95rem; margin-bottom: 3px; color: var(--light); }
+    .pipeline li span { font-size: 0.88rem; color: var(--muted); }
+
+    /* ── Tag ── */
+    .tag {
+      display: inline-block;
+      background: transparent;
+      color: var(--orange);
+      border: 1px solid var(--orange);
+      font-family: var(--font-ui);
+      font-size: 0.72rem;
+      font-weight: 700;
+      padding: 1px 7px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      vertical-align: middle;
+      margin-left: 6px;
+    }
+
+    /* ── Formats table ── */
+    .formats-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+      margin-bottom: 14px;
+      border: 1px solid var(--border);
+    }
+    .formats-table th {
+      text-align: left;
+      font-family: var(--font-ui);
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--muted);
+      background: var(--black);
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .formats-table td {
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--border);
+      color: var(--cream);
+      vertical-align: top;
+    }
+    .formats-table tr:last-child td { border-bottom: none; }
+    .formats-table td:first-child { font-family: var(--font-mono); font-size: 0.82rem; color: var(--orange); white-space: nowrap; }
+
+    /* ── Responsive ── */
+    @media (max-width: 800px) {
+      body { flex-direction: column; }
+      nav {
+        position: static;
+        height: auto;
+        width: 100%;
+        min-width: 0;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+        padding: 16px 0;
+        flex-direction: row;
+        flex-wrap: wrap;
+        overflow-x: auto;
+      }
+      .nav-brand { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+      nav a.section-head { display: none; }
+      nav a { padding: 4px 12px; white-space: nowrap; }
+      nav a.sub { padding-left: 12px; }
+      main { padding: 32px 24px 60px; }
+      h1 { font-size: 2.2rem; }
+    }
+  </style>
+</head>
+<body>
+<nav>
+  <div class="nav-brand">
+    <span>KeyVault</span>
+    <small>Manual — v1.1.0</small>
+  </div>
+  <a class="section-head" href="#">Overview</a>
+  <a href="#overview">Introduction</a>
+  <a href="#two-jobs">Managers and Stores</a>
+  <a href="#getting-started">Getting Started</a>
+  <a class="section-head" href="#">Storing Secrets</a>
+  <a href="#notes">Notes</a>
+  <a href="#api-keys">API Keys</a>
+  <a href="#reading-back">Reading a Secret</a>
+  <a href="#deleting">Deleting</a>
+  <a class="section-head" href="#">Backup</a>
+  <a href="#backup">Encrypted Export</a>
+  <a href="#restore">Restoring</a>
+  <a href="#drill">The Restore Drill</a>
+  <a class="section-head" href="#">Keys</a>
+  <a href="#ssh-gpg-age">SSH, GPG and Age</a>
+  <a class="section-head" href="#">Reference</a>
+  <a href="#storage">How Storage Works</a>
+  <a href="#requirements">Requirements</a>
+</nav>
+
+<main>
+
+  <div class="hero" id="overview">
+    <h1>KeyVault</h1>
+    <p>A key manager and a Keychain-backed store for secrets, with encrypted backup that any <code>gpg</code> can read.</p>
+    <div class="hero-actions">
+      <a class="btn btn-primary" href="https://github.com/sevmorris/KeyVault/releases/latest">Download</a>
+      <a class="btn btn-secondary" href="https://github.com/sevmorris/KeyVault">GitHub</a>
+    </div>
+  </div>
+
+  <section id="two-jobs">
+    <h2>Managers and Stores</h2>
+    <p>KeyVault does two different jobs behind one window, and the difference decides how careful you need to be.</p>
+    <p><strong>SSH, GPG and Age</strong> are <em>managed</em>. The key material already exists — in <code>~/.ssh</code>, in your GPG keyring, in the Age key files you point at under Settings. KeyVault finds it, shows it, and can generate more. It is never the only copy.</p>
+    <p><strong>API Keys and Notes</strong> are <em>stored</em>. These live in the macOS Keychain because KeyVault put them there. For a Note, nothing else holds a copy — which is the whole reason the backup section below exists.</p>
+  </section>
+
+  <section id="getting-started">
+    <h2>Getting Started</h2>
+    <p>Open KeyVault and the sidebar lists what it found: SSH keys from <code>~/.ssh</code>, GPG keys from your keyring, Age keys from the paths in Settings, plus anything you have stored.</p>
+    <p>Add something with the <strong>+</strong> under the list, the toolbar, or <kbd>⌘N</kbd> for a note and <kbd>⇧⌘N</kbd> for an API key.</p>
+  </section>
+
+  <section id="notes">
+    <h2>Notes</h2>
+    <p>A note is a titled, multi-line secret that KeyVault owns outright — recovery codes, an account number, a licence key, the contents of a key file.</p>
+    <p>The editor is deliberately <em>not</em> masked. Notes are usually pasted in bulk, often straight from a file, and a masked single-line field mangles multi-line input while hiding the evidence that it did. You cannot proof-read what you cannot see, and for a value nothing else holds a copy of, proof-reading is the point.</p>
+    <p><strong>Load from File…</strong> reads a file in verbatim. Nothing is trimmed — a trailing newline is part of some key formats, and quietly stripping it produces a value that looks right and does not work.</p>
+  </section>
+
+  <section id="api-keys">
+    <h2>API Keys</h2>
+    <p>Same storage, different question. An API key belongs to a service and fits on one line, so it gets a service field and a masked entry. Use a note instead when the value is long, multi-line, or came out of a file.</p>
+  </section>
+
+  <section id="reading-back">
+    <h2>Reading a Secret</h2>
+    <p>Select the item and press <strong>Reveal</strong>. Secrets are hidden until asked for, and the revealed value is held only while it is on screen — selecting anything else drops it.</p>
+    <p><strong>Copy</strong> marks the clipboard as concealed, which tells clipboard managers not to archive it, and clears the clipboard after 45 seconds — but only if it still holds that secret, so it never wipes something you copied in the meantime.</p>
+  </section>
+
+  <section id="deleting">
+    <h2>Deleting</h2>
+    <p>Deleting a note removes it from the Keychain immediately and permanently. There is no trash and no undo, which is why the confirmation says so plainly and why there is no minus button beside the list.</p>
+    <p>If you have not exported a backup, cancel and do that first.</p>
+  </section>
+
+  <section id="backup">
+    <h2>Encrypted Export</h2>
+    <p>Notes live in the macOS Keychain: encrypted at rest, tied to your login. That protects them from other people. It does not protect them from a dead Mac, and Keychain items do not leave the machine they were made on.</p>
+    <p><strong>Backup &amp; Restore</strong> — in the toolbar, or <kbd>⇧⌘B</kbd> — writes every stored secret to one passphrase-encrypted archive. It is OpenPGP, AES-256, ASCII-armored.</p>
+    <p>Two properties are deliberate. It is <strong>plain text</strong>, so it survives a password manager field, an email to yourself, or a printer — none of which a binary blob does reliably. And it is <strong>readable without KeyVault</strong>:</p>
+    <pre><code>gpg --decrypt keyvault-export.asc &gt; vault.json</code></pre>
+    <p>Any GnuPG, on any platform, opens it. Inside is a JSON document with each value in the clear, carrying its own decryption instructions. That is the exit: this app is not somewhere your secrets can get stuck.</p>
+    <p>The passphrase is stored nowhere and cannot be reset. Lose it and the archive is unreadable by you as well as by everyone else.</p>
+  </section>
+
+  <section id="restore">
+    <h2>Restoring</h2>
+    <p>Restore reads an archive and writes its contents back. It is keyed on each item's identifier, so it <em>adds</em> what is missing and <em>updates</em> what already exists rather than creating duplicates. Importing the same archive twice is harmless.</p>
+  </section>
+
+  <section id="drill">
+    <h2>The Restore Drill</h2>
+    <p>Because restore is idempotent, rehearsing it costs nothing. Do it.</p>
+    <p><strong>Nothing should exist only in KeyVault until you have restored an archive somewhere else and read the value back.</strong> An untested backup is not a backup — it is an assumption, and the moment you discover it was wrong is the moment you needed it.</p>
+    <p>The check that matters is not that the file exists. It is that <code>gpg --decrypt</code> outside the app returns the value you put in, character for character.</p>
+  </section>
+
+  <section id="ssh-gpg-age">
+    <h2>SSH, GPG and Age</h2>
+    <p>These are managed rather than stored. SSH keys load from <code>~/.ssh</code>, GPG from the system keyring, and Age from the file paths listed under Settings.</p>
+    <p>They are not included in the encrypted export, because KeyVault is not their only home — they are files on disk and entries in a keyring, with their own backup story. Deleting an SSH key here deletes the file; deleting a GPG key removes it from your keyring.</p>
+  </section>
+
+  <section id="storage">
+    <h2>How Storage Works</h2>
+    <p>Stored items are <code>kSecClassGenericPassword</code> entries under the service <code>io.github.sevmorris.KeyVault</code>, and each is <strong>self-describing</strong>: the name, type and metadata live in the Keychain item's own attributes.</p>
+    <p>That matters more than it sounds. An earlier design kept the index in <code>UserDefaults</code> and only the payload in the Keychain, which meant losing that one file turned every secret into an anonymous blob keyed by an identifier nothing referenced any more. The data survived; the ability to find it did not. Items written under the old scheme are migrated automatically on first launch.</p>
+  </section>
+
+  <section id="requirements">
+    <h2>Requirements</h2>
+    <ul>
+      <li>macOS 15.0 or later</li>
+      <li><code>gnupg</code> for export and import — <code>brew install gnupg</code></li>
+      <li><code>ssh-keygen</code> (ships with macOS) for SSH keys; <code>gpg</code> for GPG keys; <code>age-keygen</code> for Age</li>
+    </ul>
+    <p>The app sandbox is disabled, because it shells out to those tools.</p>
+  </section>
+
+</main>
+</body>
+</html>
