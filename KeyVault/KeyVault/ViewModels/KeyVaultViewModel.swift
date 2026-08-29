@@ -148,9 +148,17 @@ final class KeyVaultViewModel {
                 }
             }
         case .gpg:
-            if let keyID = key.keyID {
-                try await gpgService.deleteKey(keyID, includeSecret: key.hasPrivateKey)
+            // The fingerprint, not the key id — see GPGService.deleteKey. A key
+            // with neither recorded is not something to guess at, so say so
+            // rather than silently succeed at having done nothing, which is
+            // what the previous `if let` did.
+            guard let fingerprint = key.fingerprint else {
+                throw KeyError.deleteFailed(
+                    "No fingerprint was recorded for this key, and gpg will not "
+                    + "delete one without it. Remove it with: gpg --delete-secret-and-public-key"
+                )
             }
+            try await gpgService.deleteKey(fingerprint: fingerprint, includeSecret: key.hasPrivateKey)
         case .age:
             // Deleting one identity out of a shared key file is a text edit,
             // not a file removal, and guessing at it risks taking the rest of

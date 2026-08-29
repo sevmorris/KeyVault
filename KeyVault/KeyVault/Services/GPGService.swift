@@ -197,18 +197,24 @@ actor GPGService {
         }
     }
 
-    func deleteKey(_ keyID: String, includeSecret: Bool) async throws {
+    /// Remove a key from the keyring.
+    ///
+    /// Addressed by fingerprint rather than key id, because gpg refuses a
+    /// batch-mode deletion given anything shorter:
+    ///
+    ///     gpg: can't do this in batch mode
+    ///     gpg: (unless you specify the key by fingerprint)
+    ///
+    /// Without --batch it asks for confirmation on a tty this app does not
+    /// have, so passing the key id could never delete anything — every GPG
+    /// deletion failed with that message, and reported it as an export
+    /// failure into the bargain.
+    func deleteKey(fingerprint: String, includeSecret: Bool) async throws {
         let gpg = try gpgPath()
-        if includeSecret {
-            let secResult = try await shell.run(gpg, arguments: ["--batch", "--yes", "--delete-secret-and-public-key", keyID])
-            guard secResult.status == 0 else {
-                throw KeyError.exportFailed(secResult.stderr)
-            }
-        } else {
-            let pubResult = try await shell.run(gpg, arguments: ["--batch", "--yes", "--delete-key", keyID])
-            guard pubResult.status == 0 else {
-                throw KeyError.exportFailed(pubResult.stderr)
-            }
+        let option = includeSecret ? "--delete-secret-and-public-key" : "--delete-key"
+        let result = try await shell.run(gpg, arguments: ["--batch", "--yes", option, fingerprint])
+        guard result.status == 0 else {
+            throw KeyError.deleteFailed(result.stderr.isEmpty ? result.stdout : result.stderr)
         }
     }
 }
