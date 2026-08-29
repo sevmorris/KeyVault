@@ -41,7 +41,10 @@ cleanup() {
 
 # ── Preflight ─────────────────────────────────────────────────────────────────
 step "Preflight checks"
-for cmd in xcodebuild hdiutil gh git; do
+python3 -c "import dmgbuild" 2>/dev/null \
+    || fail "python3 module 'dmgbuild' not installed — run: python3 -m pip install dmgbuild"
+
+for cmd in xcodebuild hdiutil gh git python3; do
     command -v $cmd &>/dev/null || fail "'$cmd' not found in PATH"
 done
 ok "Tools present"
@@ -57,6 +60,10 @@ if git tag | grep -q "^${TAG}$"; then
     fail "Tag $TAG already exists — has this version been released?"
 fi
 ok "Tag $TAG is available"
+
+# Files marked "Shared verbatim across the sibling app repos" must not drift.
+"$PROJECT_DIR/scripts/check-shared.sh" \
+    || fail "Shared files have drifted from the sibling repos"
 
 # ── Version bump ──────────────────────────────────────────────────────────────
 step "Bumping version to $VERSION"
@@ -107,25 +114,26 @@ BUILT_VERSION=$(defaults read "$APP_PATH/Contents/Info.plist" CFBundleShortVersi
     fail "App version mismatch: expected $VERSION, got $BUILT_VERSION"
 ok "App reports $BUILT_VERSION"
 
-# ── Stage DMG contents ────────────────────────────────────────────────────────
-step "Staging DMG contents"
-rm -rf "$STAGING"
-mkdir "$STAGING"
-cp -R "$APP_PATH" "$STAGING/"
-ln -s /Applications "$STAGING/Applications"
-ok "App, Applications alias"
-
 # ── Create DMG ────────────────────────────────────────────────────────────────
 step "Creating DMG"
 rm -f "$DMG"
-hdiutil create \
-    -volname "KeyVault $TAG" \
-    -srcfolder "$STAGING" \
-    -ov \
-    -format UDZO \
-    -o "$DMG" \
-    -quiet
-ok "Created $(du -sh $DMG | cut -f1) DMG"
+# dmgbuild rather than bare hdiutil so the installer window is laid out:
+# background art with an arrow, the app and the Applications alias pinned to its
+# endpoints, chrome hidden. Matches the sibling apps.
+DMG_BACKGROUND="$PROJECT_DIR/tools/dmg/dmg-background-keyvault.png"
+[[ -f "$DMG_BACKGROUND" ]] \
+    || fail "Missing DMG background: ${DMG_BACKGROUND#$PROJECT_DIR/} — regenerate with tools/dmg/make-background.py --app-name KeyVault --slug keyvault"
+
+# A python3 that actually has dmgbuild, not Xcode's bundled one; /bin prepended
+# because dmgbuild shells out to bare tool names.
+PY_BIN=$(command -v python3)
+PATH="/bin:/usr/bin:$PATH" "$PY_BIN" -m dmgbuild \
+    -s "$PROJECT_DIR/tools/dmg/dmg-settings.py" \
+    -D app="$APP_PATH" \
+    -D background="$DMG_BACKGROUND" \
+    "KeyVault $TAG" "$DMG"
+[[ -f "$DMG" ]] || fail "dmgbuild did not produce $DMG"
+ok "Created $(du -sh "$DMG" | cut -f1) DMG"
 
 # ── Notarize ──────────────────────────────────────────────────────────────────
 step "Notarizing DMG"

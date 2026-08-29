@@ -12,6 +12,11 @@ struct KeyVaultApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView(viewModel: viewModel)
+                .task {
+                    // Silent at launch: only speaks up when there is something
+                    // to say. Matches the sibling apps.
+                    await checkForUpdates(silent: true)
+                }
         }
         .defaultSize(width: 960, height: 580)
         .commands {
@@ -32,6 +37,12 @@ struct KeyVaultApp: App {
             }
 
             // The standard home for this on macOS is the app menu at ⌘,.
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") {
+                    Task { await checkForUpdates(silent: false) }
+                }
+            }
+
             CommandGroup(replacing: .appSettings) {
                 Button("Settings…") { viewModel.showSettings = true }
                     .keyboardShortcut(",", modifiers: .command)
