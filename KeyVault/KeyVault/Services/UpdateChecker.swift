@@ -64,10 +64,19 @@ actor UpdateChecker {
             let release = try JSONDecoder().decode(Release.self, from: data)
             let remoteVersion = release.tagName.trimmingCharacters(in: CharacterSet(charactersIn: "v"))
 
-            let releaseURL = URL(string: release.htmlUrl)
-                ?? URL(string: "https://github.com/sevmorris/KeyVault/releases")!
+            // These strings come out of a JSON document. The transport is
+            // trusted, but the contents are still data, and NSWorkspace.open
+            // will act on file:// or any custom scheme just as readily as on
+            // a web address. Only https gets through.
+            func httpsURL(_ string: String) -> URL? {
+                guard let url = URL(string: string),
+                      url.scheme?.lowercased() == "https" else { return nil }
+                return url
+            }
+            let releasesFallback = URL(string: "https://github.com/sevmorris/KeyVault/releases")!
+            let releaseURL = httpsURL(release.htmlUrl) ?? releasesFallback
             let downloadURL = release.assets.first(where: { $0.name.hasSuffix(".dmg") })
-                .flatMap { URL(string: $0.browserDownloadUrl) }
+                .flatMap { httpsURL($0.browserDownloadUrl) }
                 ?? releaseURL
 
             if remoteVersion.compare(currentVersion, options: .numeric) == .orderedDescending {

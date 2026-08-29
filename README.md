@@ -70,6 +70,8 @@ more detail, including what the archive contains and how to read it back.
 - macOS 15.0+
 - `gnupg` for export and import — `brew install gnupg`
 - `ssh-keygen` (ships with macOS) for SSH; `gpg` for GPG keys
+- `age` is optional — Age key generation is offered only when `age-keygen` is
+  installed (`brew install age`), and says so plainly when it is not
 - App sandbox is disabled: it shells out to these tools
 
 ## Install

@@ -2,7 +2,17 @@ import Foundation
 
 actor AgeService {
     private let shell = ShellService()
-    private static let agekeygenPaths = ["/usr/local/bin/age-keygen", "/opt/homebrew/bin/age-keygen"]
+    private static let agekeygenPaths = ["/opt/homebrew/bin/age-keygen", "/usr/local/bin/age-keygen"]
+
+    /// Whether `age-keygen` is installed at all.
+    ///
+    /// `nonisolated` so a view can ask without awaiting: the Generate sheet
+    /// offered Age unconditionally, and since `age` is not installed here that
+    /// option could only ever fail. Better to say so in the form than to let
+    /// someone fill it in and press a button that cannot work.
+    nonisolated static var isAvailable: Bool {
+        agekeygenPaths.contains { FileManager.default.fileExists(atPath: $0) }
+    }
 
     private func agekeygenPath() -> String? {
         Self.agekeygenPaths.first { FileManager.default.fileExists(atPath: $0) }
@@ -36,6 +46,7 @@ actor AgeService {
                 let pubKey = pendingPublicKey ?? ""
                 let displayName = pubKey.isEmpty ? "Age Key" : String(pubKey.prefix(20)) + "..."
                 let key = EncryptionKey(
+                    id: UUID(stableIdentity: "age:\(path):\(pubKey)"),
                     type: .age,
                     name: displayName,
                     publicKey: pubKey.isEmpty ? nil : pubKey,
@@ -62,10 +73,4 @@ actor AgeService {
         }
     }
 
-    func publicKeyText(for key: EncryptionKey) throws -> String {
-        guard let pubKey = key.publicKey, !pubKey.isEmpty else {
-            throw KeyError.exportFailed("No public key available for this Age key")
-        }
-        return pubKey
-    }
 }

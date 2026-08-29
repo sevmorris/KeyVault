@@ -44,6 +44,7 @@ actor SSHService {
             let hasPrivate = fm.fileExists(atPath: privatePath)
 
             let key = EncryptionKey(
+                id: UUID(stableIdentity: "ssh:\(privatePath)"),
                 type: .ssh,
                 name: privateName,
                 fingerprint: fingerprint,
@@ -77,14 +78,4 @@ actor SSHService {
         }
     }
 
-    func publicKeyText(for key: EncryptionKey) throws -> String {
-        guard let path = key.path else {
-            throw KeyError.exportFailed("No path for key")
-        }
-        let pubPath = path + ".pub"
-        guard let text = try? String(contentsOfFile: pubPath, encoding: .utf8) else {
-            throw KeyError.exportFailed("Cannot read \(pubPath)")
-        }
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
 }

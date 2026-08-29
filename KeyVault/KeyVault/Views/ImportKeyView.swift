@@ -19,7 +19,10 @@ struct ImportKeyView: View {
                 .font(.title2)
                 .fontWeight(.semibold)
 
-            Text("Import an SSH public key (.pub), GPG armored key file, or Age key file.")
+            // Age is not listed: importKey routes everything that is not a
+            // .pub to gpg, so an Age key file only ever produced a confusing
+            // gpg parse error. Add it here when there is something to add.
+            Text("Import an SSH public key (.pub) or a GPG armored key file.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
