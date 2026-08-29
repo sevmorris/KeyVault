@@ -125,7 +125,11 @@ struct BackupView: View {
     private func presentSavePanel() -> URL? {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "keyvault-export.asc"
-        panel.allowedContentTypes = [.plainText]
+        // No allowedContentTypes: constraining to .plainText makes the panel
+        // enforce that type's extension and save "keyvault-export.asc.txt".
+        // .asc has no registered UTType to name instead, so the right move is
+        // to stop constraining and let the filename stand.
+        panel.allowsOtherFileTypes = true
         panel.canCreateDirectories = true
         panel.message = "Save the encrypted archive somewhere that is not this Mac."
         return panel.runModal() == .OK ? panel.url : nil

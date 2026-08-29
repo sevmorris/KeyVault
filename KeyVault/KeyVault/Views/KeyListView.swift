@@ -18,49 +18,58 @@ struct KeyListView: View {
                 .listStyle(.inset)
             }
         }
-        .toolbar {
-            ToolbarItemGroup {
-                if viewModel.selectedType == .api || viewModel.selectedType == nil {
-                    Button {
-                        viewModel.showAddAPIKeySheet = true
-                    } label: {
-                        Label("Add API Key", systemImage: "plus")
-                    }
-                    .help("Add API Key")
-                }
-
-                if viewModel.selectedType == .note || viewModel.selectedType == nil {
-                    Button {
-                        viewModel.showAddNoteSheet = true
-                    } label: {
-                        Label("Add Note", systemImage: "doc.badge.plus")
-                    }
-                    .help("Add Note")
-                }
-
-                Button {
-                    viewModel.showImportSheet = true
-                } label: {
-                    Image(systemName: "square.and.arrow.down")
-                }
-                .help("Import Key")
-
-                Button {
-                    viewModel.showGenerateSheet = true
-                } label: {
-                    Image(systemName: "wand.and.stars")
-                }
-                .help("Generate Key")
-
-                Button {
-                    Task { await viewModel.reload() }
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .help("Refresh")
-            }
-        }
+        .safeAreaInset(edge: .bottom, spacing: 0) { addBar }
     }
+
+    /// The +/- strip under a list is the Mac idiom for "this list is something
+    /// you add to" — Contacts, System Settings and Finder sidebars all use it.
+    /// The toolbar buttons stay, but they are discoverable only if you go
+    /// looking; this is where the eye already is when the list is empty.
+    ///
+    /// No minus. Deleting goes through the detail pane's confirmation, and for
+    /// a Note that confirmation is the only thing between a click and something
+    /// nothing else holds a copy of.
+    @ViewBuilder private var addBar: some View {
+        HStack(spacing: 0) {
+            switch viewModel.selectedType {
+            case .note:
+                addButton("Add Note") { viewModel.showAddNoteSheet = true }
+            case .api:
+                addButton("Add API Key") { viewModel.showAddAPIKeySheet = true }
+            case .none:
+                // Nothing is filtered, so the button has to ask which.
+                Menu {
+                    Button("New Note") { viewModel.showAddNoteSheet = true }
+                    Button("New API Key") { viewModel.showAddAPIKeySheet = true }
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .frame(width: 28, height: 22)
+                .help("Add")
+            case .ssh, .gpg, .age:
+                // These are generated or imported, never typed in.
+                addButton("Generate Key") { viewModel.showGenerateSheet = true }
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 4)
+        .frame(height: 26)
+        .background(.bar)
+        .overlay(alignment: .top) { Divider() }
+    }
+
+    private func addButton(_ help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: "plus")
+                .frame(width: 28, height: 22)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .help(help)
+    }
+
 }
 
 private struct KeyRowView: View {

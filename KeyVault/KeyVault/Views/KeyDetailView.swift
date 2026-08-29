@@ -7,12 +7,23 @@ struct KeyDetailView: View {
     @State private var deleteError: String?
     @State private var copied = false
 
+    /// Held only while revealed, and dropped the moment the pane changes key.
+    /// Loading it on appear would keep every secret you browsed past sitting
+    /// in memory for the life of the window.
+    @State private var revealedSecret: String?
+    @State private var secretError: String?
+    @State private var copiedSecret = false
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 header
                 Divider()
                 metadata
+                if SecretStore.ownedTypes.contains(key.type) {
+                    Divider()
+                    secretSection
+                }
                 if let pubKey = key.publicKey, !pubKey.isEmpty {
                     Divider()
                     publicKeySection(pubKey)
@@ -23,6 +34,13 @@ struct KeyDetailView: View {
             .padding(20)
         }
         .navigationTitle(key.name)
+        // Selecting a different item must not leave the previous secret on
+        // screen, or in memory.
+        .onChange(of: key.id) {
+            revealedSecret = nil
+            secretError = nil
+            copiedSecret = false
+        }
         .alert("Delete Key?", isPresented: $showDeleteConfirm) {
             Button("Delete", role: .destructive) {
                 Task {
@@ -44,6 +62,87 @@ struct KeyDetailView: View {
             Button("OK") { deleteError = nil }
         } message: {
             Text(deleteError ?? "")
+        }
+    }
+
+    // MARK: - Secret
+
+    /// Hidden until asked for. A vault that shows its contents to anyone who
+    /// clicks a row is a vault in name only — and unlike a password field,
+    /// these are often long enough that revealing them is a deliberate act
+    /// rather than a glance.
+    @ViewBuilder private var secretSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Secret")
+                    .font(.headline)
+                Spacer()
+                if revealedSecret == nil {
+                    Button("Reveal") { loadSecret() }
+                } else {
+                    Button("Hide") { revealedSecret = nil }
+                    Button(copiedSecret ? "Copied" : "Copy") { copySecret() }
+                        .disabled(copiedSecret)
+                }
+            }
+
+            if let secret = revealedSecret {
+                ScrollView {
+                    Text(secret)
+                        .font(.system(.body, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                }
+                .frame(maxHeight: 220)
+                .background(Color(nsColor: .textBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.secondary.opacity(0.3))
+                )
+            } else if let secretError {
+                Text(secretError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            } else {
+                Text("Hidden.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func loadSecret() {
+        secretError = nil
+        do {
+            revealedSecret = try SecretStore.loadSecret(for: key.id)
+        } catch {
+            secretError = "Could not read this secret from the Keychain: \(error.localizedDescription)"
+        }
+    }
+
+    private func copySecret() {
+        guard let secret = revealedSecret else { return }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        // Tells clipboard managers not to archive this. Not enforceable — a
+        // manager can ignore it — but the ones worth using honour it, and
+        // silently seeding a searchable history with vault contents is worse
+        // than not offering copy at all.
+        pb.setString("", forType: .init("org.nspasteboard.ConcealedType"))
+        pb.setString(secret, forType: .string)
+
+        copiedSecret = true
+        // Clear the clipboard afterwards, but only if it still holds this
+        // secret — stomping on whatever the user copied since would be its own
+        // small betrayal.
+        Task {
+            try? await Task.sleep(for: .seconds(45))
+            if NSPasteboard.general.string(forType: .string) == secret {
+                NSPasteboard.general.clearContents()
+            }
+            copiedSecret = false
         }
     }
 

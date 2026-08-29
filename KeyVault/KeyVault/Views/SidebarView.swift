@@ -20,23 +20,5 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
-        .toolbar {
-            ToolbarItem {
-                Button {
-                    viewModel.showBackupSheet = true
-                } label: {
-                    Image(systemName: "arrow.up.doc.on.clipboard")
-                }
-                .help("Backup & Restore")
-            }
-            ToolbarItem {
-                Button {
-                    viewModel.showSettings = true
-                } label: {
-                    Image(systemName: "gear")
-                }
-                .help("Settings")
-            }
-        }
     }
 }
