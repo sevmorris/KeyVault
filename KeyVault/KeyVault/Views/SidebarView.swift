@@ -4,11 +4,11 @@ struct SidebarView: View {
     @Bindable var viewModel: KeyVaultViewModel
 
     var body: some View {
-        List(selection: $viewModel.sidebarSelection) {
+        List(selection: $viewModel.selectedType) {
             Section("Secrets") {
                 ForEach(secretTypes, id: \.self) { type in
                     Label(type.rawValue, systemImage: type.systemImage)
-                        .tag(SidebarSelection.type(type))
+                        .tag(Optional(type))
                         .badge(viewModel.keyCount(for: type))
                 }
             }
@@ -22,17 +22,19 @@ struct SidebarView: View {
                 Section("Keys") {
                     ForEach(presentKeyTypes, id: \.self) { type in
                         Label(type.rawValue, systemImage: type.systemImage)
-                            .tag(SidebarSelection.type(type))
+                            .tag(Optional(type))
                             .badge(viewModel.keyCount(for: type))
                     }
                 }
             }
 
-            Section {
-                Label("Everything", systemImage: "tray.full")
-                    .tag(SidebarSelection.everything)
-                    .badge(viewModel.allKeys.count)
-            }
+            // No "Everything" row. A List whose selection binding is optional
+            // treats nil as "nothing is selected", so a row tagged nil can
+            // never be selected or drawn as selected — it only ever looked
+            // right while the app happened to launch with nothing selected.
+            // Showing all types at once needs a selection domain with a value
+            // to spare for it, and that is worth doing properly rather than
+            // shipping a row that does nothing when clicked.
         }
         .listStyle(.sidebar)
     }
