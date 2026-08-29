@@ -8,7 +8,16 @@ final class KeyVaultViewModel {
     /// Opens on notes rather than on everything. The key types are an
     /// inventory of things other tools own; the stored secrets are what this
     /// app is for, and a flat list of all five buried them.
-    var selectedType: KeyType? = .note
+    var sidebarSelection: SidebarSelection = .type(.note)
+
+    /// The selection as a filter: nil means "everything", which is what the
+    /// list filtering and the empty states already understand.
+    var selectedType: KeyType? {
+        switch sidebarSelection {
+        case .everything: return nil
+        case .type(let type): return type
+        }
+    }
     var selectedKeyID: UUID? = nil
     var isLoading = false
     var showGenerateSheet = false

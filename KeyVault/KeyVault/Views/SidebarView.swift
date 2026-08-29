@@ -4,11 +4,11 @@ struct SidebarView: View {
     @Bindable var viewModel: KeyVaultViewModel
 
     var body: some View {
-        List(selection: $viewModel.selectedType) {
+        List(selection: $viewModel.sidebarSelection) {
             Section("Secrets") {
                 ForEach(secretTypes, id: \.self) { type in
                     Label(type.rawValue, systemImage: type.systemImage)
-                        .tag(Optional(type))
+                        .tag(SidebarSelection.type(type))
                         .badge(viewModel.keyCount(for: type))
                 }
             }
@@ -22,7 +22,7 @@ struct SidebarView: View {
                 Section("Keys") {
                     ForEach(presentKeyTypes, id: \.self) { type in
                         Label(type.rawValue, systemImage: type.systemImage)
-                            .tag(Optional(type))
+                            .tag(SidebarSelection.type(type))
                             .badge(viewModel.keyCount(for: type))
                     }
                 }
@@ -30,7 +30,7 @@ struct SidebarView: View {
 
             Section {
                 Label("Everything", systemImage: "tray.full")
-                    .tag(Optional<KeyType>.none)
+                    .tag(SidebarSelection.everything)
                     .badge(viewModel.allKeys.count)
             }
         }
