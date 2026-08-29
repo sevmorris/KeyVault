@@ -1,5 +1,17 @@
 # KeyVault
 
+<p align="center">
+  <strong>Key manager and Keychain-backed secret store</strong>
+  <br />
+  <strong>Version:</strong> 1.1.0
+  <br />
+  <a href="https://github.com/sevmorris/KeyVault/releases/latest/download/KeyVault-v1.1.0.dmg"><strong>Download Latest (DMG)</strong></a>
+  ·
+  <a href="https://sevmorris.github.io/KeyVault/manual/">Manual</a>
+  ·
+  <a href="https://github.com/sevmorris/KeyVault/releases">Releases</a>
+</p>
+
 A native macOS app for managing SSH, GPG, and Age keys, and for storing secrets
 in the macOS Keychain.
 
@@ -50,6 +62,9 @@ Restore is idempotent — it adds what is missing and updates what already exist
 until you have restored an archive somewhere else and read the value back.** An
 untested backup is not a backup.
 
+The [manual](https://sevmorris.github.io/KeyVault/manual/#backup) covers this in
+more detail, including what the archive contains and how to read it back.
+
 ## Requirements
 
 - macOS 15.0+
@@ -74,3 +89,8 @@ type, and metadata live in the Keychain item's own attributes rather than in a
 side table. An earlier design kept the index in UserDefaults, which meant losing
 that plist turned every secret into an anonymous blob keyed by a UUID nothing
 referenced. Items written under that scheme are migrated on first launch.
+
+## License
+
+Copyright © 2026 Seven Morris.
+Distributed under the [MIT License](LICENSE).
