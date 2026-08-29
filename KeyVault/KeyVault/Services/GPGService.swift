@@ -2,13 +2,9 @@ import Foundation
 
 actor GPGService {
     private let shell = ShellService()
-    private static let gpgPaths = ["/usr/local/bin/gpg", "/opt/homebrew/bin/gpg", "/usr/bin/gpg"]
 
     private func gpgPath() throws -> String {
-        for path in Self.gpgPaths {
-            if FileManager.default.fileExists(atPath: path) { return path }
-        }
-        throw KeyError.toolNotFound("gpg")
+        try GPGLocator.resolve()
     }
 
     func loadKeys() async throws -> [EncryptionKey] {
@@ -44,6 +40,7 @@ actor GPGService {
             guard let keyID = currentKeyID else { return }
             let hasPrivate = secretKeyIDs.contains(keyID)
             let key = EncryptionKey(
+                id: UUID(stableIdentity: "gpg:\(keyID)"),
                 type: .gpg,
                 name: currentName ?? keyID,
                 fingerprint: currentFingerprint,
@@ -102,23 +99,82 @@ actor GPGService {
         return Date(timeIntervalSince1970: ts)
     }
 
-    func generate(name: String, email: String, algorithm: String, expiry: String) async throws {
+    /// The key-shape parameters for an algorithm.
+    ///
+    /// Previously every algorithm was emitted as `Key-Length: 4096`, which was
+    /// only ever right for RSA. DSA silently accepted it and gave you 3072
+    /// anyway — so the key you got was never the key you asked for — and ECDSA
+    /// failed outright with "Unknown elliptic curve", meaning that option had
+    /// never once produced a key.
+    private static func shapeParameters(for algorithm: String) throws -> String {
+        switch algorithm.uppercased() {
+        case "RSA":
+            return """
+            Key-Type: RSA
+            Key-Length: 4096
+            Subkey-Type: RSA
+            Subkey-Length: 4096
+            """
+        case "DSA":
+            // 3072 is GnuPG's ceiling for DSA. DSA cannot encrypt, so the
+            // encryption subkey is Elgamal — the conventional pairing.
+            return """
+            Key-Type: DSA
+            Key-Length: 3072
+            Subkey-Type: ELG-E
+            Subkey-Length: 3072
+            """
+        case "ECDSA":
+            // Elliptic curves are named, not measured. ECDH for the subkey,
+            // because ECDSA signs and does not encrypt.
+            return """
+            Key-Type: ECDSA
+            Key-Curve: nistp256
+            Subkey-Type: ECDH
+            Subkey-Curve: nistp256
+            """
+        default:
+            throw KeyError.keygenFailed("Unsupported GPG algorithm: \(algorithm)")
+        }
+    }
+
+    /// Generate a key pair.
+    ///
+    /// An empty `passphrase` means an unprotected private key, and the caller
+    /// is expected to have said so out loud. It used to be the only option:
+    /// `%no-protection` was hardcoded, so every key KeyVault generated sat in
+    /// `~/.gnupg` usable by anything that could read the file, and nothing in
+    /// the UI mentioned it.
+    func generate(
+        name: String,
+        email: String,
+        algorithm: String,
+        expiry: String,
+        passphrase: String
+    ) async throws {
         let gpg = try gpgPath()
+        // The parameter block must begin with Key-Type — gpg rejects one that
+        // opens with Passphrase — so protection is appended, not prepended.
+        let protection = passphrase.isEmpty ? "%no-protection" : "Passphrase: \(passphrase)"
         let batchInput = """
-        %no-protection
-        Key-Type: \(algorithm)
-        Key-Length: 4096
-        Subkey-Type: \(algorithm)
-        Subkey-Length: 4096
+        \(try Self.shapeParameters(for: algorithm))
         Name-Real: \(name)
         Name-Email: \(email)
         Expire-Date: \(expiry)
+        \(protection)
         %commit
         """
         guard let data = batchInput.data(using: .utf8) else {
             throw KeyError.keygenFailed("Failed to encode batch input")
         }
-        let result = try await shell.runWithStdin(gpg, arguments: ["--batch", "--full-generate-key"], stdinData: data)
+        let result = try await shell.runWithStdin(
+            gpg,
+            // loopback so a passphrase supplied here is used directly rather
+            // than gpg-agent trying to raise a pinentry against a tty a GUI
+            // app does not have.
+            arguments: ["--batch", "--pinentry-mode", "loopback", "--full-generate-key"],
+            stdinData: data
+        )
         guard result.status == 0 else {
             throw KeyError.keygenFailed(result.stderr.isEmpty ? result.stdout : result.stderr)
         }

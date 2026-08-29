@@ -165,8 +165,20 @@ final class KeyVaultViewModel {
         await reload()
     }
 
-    func generateGPGKey(name: String, email: String, algorithm: String, expiry: String) async throws {
-        try await gpgService.generate(name: name, email: email, algorithm: algorithm, expiry: expiry)
+    func generateGPGKey(
+        name: String,
+        email: String,
+        algorithm: String,
+        expiry: String,
+        passphrase: String
+    ) async throws {
+        try await gpgService.generate(
+            name: name,
+            email: email,
+            algorithm: algorithm,
+            expiry: expiry,
+            passphrase: passphrase
+        )
         await reload()
     }
 

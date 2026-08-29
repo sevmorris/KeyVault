@@ -20,6 +20,7 @@ struct GenerateKeyView: View {
     @State private var gpgEmail = ""
     @State private var gpgAlgorithm = "RSA"
     @State private var gpgExpiry = "0"
+    @State private var gpgPassphrase = ""
 
     // Age fields
     @State private var agePath = "~/.age/keys.txt"
@@ -106,6 +107,15 @@ struct GenerateKeyView: View {
                 ForEach(gpgAlgorithms, id: \.self) { Text($0).tag($0) }
             }
             TextField("Expiry (0 = never, or e.g. 1y, 6m)", text: $gpgExpiry)
+            SecureField("Passphrase (leave blank for none)", text: $gpgPassphrase)
+            // Blank was silently the only option until now. If it is still the
+            // choice, say what it costs rather than let it pass unremarked.
+            if gpgPassphrase.isEmpty {
+                Text("Without a passphrase the private key sits unprotected in "
+                     + "~/.gnupg — anything that can read the file can use the key.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -115,6 +125,12 @@ struct GenerateKeyView: View {
             Text("The Age key file will contain both the private and public key. Keep it safe.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            if !AgeService.isAvailable {
+                Text("age-keygen is not installed, so this cannot generate an "
+                     + "Age key. Install it with: brew install age")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
         }
     }
 
@@ -122,7 +138,7 @@ struct GenerateKeyView: View {
         switch selectedType {
         case .ssh: return !sshPath.isEmpty
         case .gpg: return !gpgName.isEmpty && !gpgEmail.isEmpty
-        case .age: return !agePath.isEmpty
+        case .age: return !agePath.isEmpty && AgeService.isAvailable
         case .api, .note: return false
         }
     }
@@ -146,7 +162,8 @@ struct GenerateKeyView: View {
                     name: gpgName,
                     email: gpgEmail,
                     algorithm: gpgAlgorithm,
-                    expiry: gpgExpiry
+                    expiry: gpgExpiry,
+                    passphrase: gpgPassphrase
                 )
             case .age:
                 try await viewModel.generateAgeKey(outputPath: agePath)
