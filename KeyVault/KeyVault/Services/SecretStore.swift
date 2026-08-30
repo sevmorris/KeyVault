@@ -1,4 +1,5 @@
 import Foundation
+import LocalAuthentication
 import Security
 
 /// Keychain-backed store for the secrets KeyVault *owns* — API keys and notes —
@@ -21,6 +22,61 @@ import Security
 /// is kept only to migrate items written by the old scheme.
 enum SecretStore {
     static let keychainService = "io.github.sevmorris.KeyVault"
+
+    // MARK: - Keychain protection
+    //
+    // Items used to be stored with kSecAttrAccessible and no access control,
+    // which meant any process running as the user could read every note and
+    // API key with no prompt at all:
+    //
+    //   security find-generic-password -s io.github.sevmorris.KeyVault -w
+    //
+    // returned a stored secret directly. The reveal button in KeyDetailView
+    // guards against someone reading the screen; it never guarded against
+    // software.
+    //
+    // The fix is a SecAccessControl requiring user presence — Touch ID, watch,
+    // or the login password — on every read of the payload.
+    //
+    // Note on what was NOT done. The obvious move is the data-protection
+    // keychain, which is what makes a notarytool profile unreadable by the
+    // `security` CLI. It is not reachable here: it needs an application
+    // identifier from a provisioning profile, and this app is built ad-hoc and
+    // signed Developer ID with no profile. Measured, not assumed —
+    //
+    //   ad-hoc, kSecUseDataProtectionKeychain          -> -34018 missing entitlement
+    //   Developer ID, no entitlement                   -> -34018
+    //   Developer ID + keychain-access-groups, no profile -> killed on launch
+    //
+    // whereas a SecAccessControl on this keychain works with no entitlement at
+    // all, and does block the CLI: the same `security` read that returns a
+    // secret instantly for an unprotected item blocks awaiting authentication
+    // for a protected one.
+
+    /// Reused so that reveal-then-copy does not authenticate twice. Short on
+    /// purpose: this is the window in which someone at an already-unlocked Mac
+    /// can read a second secret without touching the sensor again.
+    private static let authContext: LAContext = {
+        let context = LAContext()
+        context.touchIDAuthenticationAllowableReuseDuration = 30
+        return context
+    }()
+
+    private static func accessControl() throws -> SecAccessControl {
+        var error: Unmanaged<CFError>?
+        // ThisDeviceOnly: the secret must not ride an iCloud backup to another
+        // machine. Moving a vault between Macs goes through
+        // VaultExportService, which is the path that has actually been drilled.
+        guard let control = SecAccessControlCreateWithFlags(
+            nil,
+            kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+            .userPresence,
+            &error
+        ) else {
+            throw KeyError.keychainError(errSecParam)
+        }
+        return control
+    }
     private static let legacyMetaDefaultsKey = "APIKeyMeta"
     private static let migrationDoneKey = "SecretStoreMetadataMigrated"
 
@@ -43,7 +99,9 @@ enum SecretStore {
 
         var query = baseQuery(id: key.id)
         query[kSecValueData] = secretData
-        query[kSecAttrAccessible] = kSecAttrAccessibleWhenUnlocked
+        // kSecAttrAccessControl replaces kSecAttrAccessible — setting both is
+        // an error, and the access control carries the accessibility itself.
+        query[kSecAttrAccessControl] = try accessControl()
         attributes(for: key).forEach { query[$0.key] = $0.value }
 
         let status = SecItemAdd(query as CFDictionary, nil)
@@ -65,6 +123,11 @@ enum SecretStore {
             }
             changes[kSecValueData] = data
         }
+        // Editing an item written before access control existed upgrades it in
+        // place, so the vault protects itself as you touch it rather than
+        // waiting on a migration to sweep everything.
+        changes[kSecAttrAccessControl] = try accessControl()
+
         let status = SecItemUpdate(baseQuery(id: key.id) as CFDictionary,
                                    changes as CFDictionary)
         guard status == errSecSuccess else { throw KeyError.keychainError(status) }
@@ -83,10 +146,14 @@ enum SecretStore {
 
     // MARK: - Read
 
+    /// Reading the payload is what triggers authentication — `loadAll` reads
+    /// attributes only and stays silent, so browsing the list never prompts and
+    /// revealing a secret does.
     static func loadSecret(for id: UUID) throws -> String {
         var query = baseQuery(id: id)
         query[kSecReturnData] = true
         query[kSecMatchLimit] = kSecMatchLimitOne
+        query[kSecUseAuthenticationContext] = authContext
 
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
@@ -103,13 +170,17 @@ enum SecretStore {
     static func loadAll(of type: KeyType? = nil) -> [EncryptionKey] {
         migrateLegacyMetadataIfNeeded()
 
-        var query: [CFString: Any] = [
+        // Attributes only — never kSecReturnData, so enumerating the vault
+        // neither authenticates nor puts a secret in memory. Browsing the list
+        // stays silent; revealing one is what asks for Touch ID.
+        let query: [CFString: Any] = [
             kSecClass: kSecClassGenericPassword,
             kSecAttrService: keychainService,
             kSecMatchLimit: kSecMatchLimitAll,
-            kSecReturnAttributes: true
+            kSecReturnAttributes: true,
+            kSecReturnData: false,
+            kSecUseDataProtectionKeychain: false
         ]
-        query[kSecReturnData] = false
 
         var result: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
@@ -183,10 +254,14 @@ enum SecretStore {
     // MARK: - Helpers
 
     private static func baseQuery(id: UUID) -> [CFString: Any] {
+        // Explicit rather than defaulted: "which keychain did that item land
+        // in" is not a question to leave to an SDK default in a store of
+        // things that cannot be re-created.
         [
             kSecClass: kSecClassGenericPassword,
             kSecAttrService: keychainService,
-            kSecAttrAccount: id.uuidString
+            kSecAttrAccount: id.uuidString,
+            kSecUseDataProtectionKeychain: false
         ]
     }
 
