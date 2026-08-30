@@ -79,6 +79,7 @@ enum SecretStore {
     }
     private static let legacyMetaDefaultsKey = "APIKeyMeta"
     private static let migrationDoneKey = "SecretStoreMetadataMigrated"
+    private static let accessControlMigrationKey = "SecretStoreAccessControlMigrated"
 
     /// The fields that don't have a dedicated Keychain attribute.
     private struct StoredMeta: Codable {
@@ -144,6 +145,74 @@ enum SecretStore {
         }
     }
 
+    // MARK: - Access control migration
+
+    /// One-time sweep applying the access control to items written before it
+    /// existed. Runs from `loadAll`, so it happens on the first read after the
+    /// update rather than needing to be found in a menu.
+    ///
+    /// Safe to interrupt. SecItemUpdate applies kSecAttrAccessControl in place,
+    /// so each item is atomic: nothing is deleted, there is no window where an
+    /// item does not exist, and no secret is read into memory to do it — the
+    /// sweep never asks for kSecReturnData. Verified rather than assumed: an
+    /// item updated this way stops being readable by
+    /// `security find-generic-password -w`, which is the whole point.
+    ///
+    /// The flag is set only after a clean sweep. A partial run — a locked
+    /// keychain, an item that refuses — retries on the next launch instead of
+    /// recording success and leaving the stragglers unprotected forever.
+    static func migrateToAccessControlIfNeeded() {
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: accessControlMigrationKey) else { return }
+        guard let control = try? accessControl() else { return }
+
+        let ids = allAccountIDs()
+        guard !ids.isEmpty else {
+            // Nothing to protect: an empty vault is migrated by definition, and
+            // recording that keeps the sweep from re-running on every read.
+            defaults.set(true, forKey: accessControlMigrationKey)
+            return
+        }
+
+        var failed = 0
+        for id in ids {
+            let status = SecItemUpdate(
+                baseQuery(id: id) as CFDictionary,
+                [kSecAttrAccessControl: control] as CFDictionary
+            )
+            // errSecItemNotFound: deleted between enumeration and update. Not a
+            // failure — there is nothing left to protect.
+            if status != errSecSuccess && status != errSecItemNotFound {
+                failed += 1
+            }
+        }
+
+        if failed == 0 {
+            defaults.set(true, forKey: accessControlMigrationKey)
+        }
+    }
+
+    /// Account UUIDs for every item this store owns. Attributes only — the
+    /// sweep must not pull secrets into memory to do its job.
+    private static func allAccountIDs() -> [UUID] {
+        let query: [CFString: Any] = [
+            kSecClass: kSecClassGenericPassword,
+            kSecAttrService: keychainService,
+            kSecMatchLimit: kSecMatchLimitAll,
+            kSecReturnAttributes: true,
+            kSecReturnData: false,
+            kSecUseDataProtectionKeychain: false
+        ]
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let items = result as? [[CFString: Any]] else {
+            return []
+        }
+        return items.compactMap {
+            ($0[kSecAttrAccount] as? String).flatMap(UUID.init(uuidString:))
+        }
+    }
+
     // MARK: - Read
 
     /// Reading the payload is what triggers authentication — `loadAll` reads
@@ -169,6 +238,7 @@ enum SecretStore {
     /// Pass a type to filter; nil returns all owned types.
     static func loadAll(of type: KeyType? = nil) -> [EncryptionKey] {
         migrateLegacyMetadataIfNeeded()
+        migrateToAccessControlIfNeeded()
 
         // Attributes only — never kSecReturnData, so enumerating the vault
         // neither authenticates nor puts a secret in memory. Browsing the list

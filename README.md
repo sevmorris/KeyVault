@@ -31,8 +31,14 @@ about it.
 ## Backup
 
 Notes are stored in the macOS Keychain, which is encrypted at rest and tied to
-your login. That protects them from other people. It does not protect them from
-a dead Mac, and Keychain items are local to one machine.
+your login. Reading one requires user presence — Touch ID, Apple Watch, or your
+login password — so a note is protected from other people *and* from anything
+running as you. It used to be only the former: without that control, any script
+could read every note with `security find-generic-password -w` and never
+prompt.
+
+None of that protects them from a dead Mac, and Keychain items are local to one
+machine.
 
 So: **export, and then read the export back.**
 
