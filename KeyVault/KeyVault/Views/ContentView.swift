@@ -72,6 +72,34 @@ struct ContentView: View {
         .sheet(isPresented: $viewModel.showBackupSheet) {
             BackupView(viewModel: viewModel)
         }
+        // The door. Presented whenever a configured vault is locked, and not
+        // dismissible: there is nothing useful to do behind it, and every
+        // reveal, export and edit would fail one at a time instead.
+        .sheet(isPresented: .constant(viewModel.vaultIsLocked)) {
+            VaultLockView(mode: .unlock, onSuccess: { _ in
+                viewModel.refreshVaultState()
+                Task { await viewModel.reload() }
+            }, onCancel: nil)
+            .interactiveDismissDisabled()
+        }
+        .sheet(isPresented: $viewModel.showVaultSetup) {
+            VaultLockView(mode: .setup, onSuccess: { wasSetup in
+                viewModel.showVaultSetup = false
+                viewModel.refreshVaultState()
+                viewModel.offerEncryptExisting = wasSetup
+            }, onCancel: { viewModel.showVaultSetup = false })
+        }
+        .alert("Encrypt what is already stored?",
+               isPresented: $viewModel.offerEncryptExisting) {
+            Button("Encrypt Now") { Task { await viewModel.encryptExistingSecrets() } }
+            Button("Later", role: .cancel) { }
+        } message: {
+            Text("""
+                Secrets saved before now are still stored as plain text and \
+                readable by anything running as you. Back up first if you have \
+                not — this cannot be undone without your passphrase.
+                """)
+        }
         .sheet(isPresented: $viewModel.showSettings) {
             SettingsView(viewModel: viewModel)
         }

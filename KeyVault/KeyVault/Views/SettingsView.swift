@@ -4,6 +4,7 @@ struct SettingsView: View {
     @Bindable var viewModel: KeyVaultViewModel
     @Environment(\.dismiss) private var dismiss
     @State private var newPath = ""
+    @State private var plaintextRemaining = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -48,8 +49,51 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+
+                Section {
+                    if viewModel.isVaultConfigured {
+                        LabeledContent("Master passphrase") {
+                            Text("Set").foregroundStyle(.secondary)
+                        }
+                        if plaintextRemaining > 0 {
+                            HStack {
+                                Label("\(plaintextRemaining) secret(s) still stored as plain text",
+                                      systemImage: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(.orange)
+                                Spacer()
+                                Button("Encrypt Now") {
+                                    Task {
+                                        await viewModel.encryptExistingSecrets()
+                                        plaintextRemaining = SecretStore.plaintextCount()
+                                    }
+                                }
+                            }
+                        } else {
+                            Label("All secrets are encrypted", systemImage: "checkmark.seal.fill")
+                                .foregroundStyle(.green)
+                        }
+                        Button("Lock Vault Now") {
+                            viewModel.lockVault()
+                            dismiss()
+                        }
+                    } else {
+                        Button("Set a Master Passphrase…") {
+                            dismiss()
+                            viewModel.showVaultSetup = true
+                        }
+                    }
+                } header: {
+                    Text("Security")
+                } footer: {
+                    Text(viewModel.isVaultConfigured
+                         ? "Secrets are encrypted with your master passphrase before they are stored, so nothing else on this Mac can read them."
+                         : "Without a master passphrase, notes and API keys are stored where any process running as you can read them. Setting one encrypts them before they are stored.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             .formStyle(.grouped)
+            .onAppear { plaintextRemaining = SecretStore.plaintextCount() }
 
             HStack {
                 Button("Cancel") { dismiss() }

@@ -17,6 +17,52 @@ final class KeyVaultViewModel {
     var showAddNoteSheet = false
     var showBackupSheet = false
     var showSettings = false
+
+    // MARK: - Vault lock
+    //
+    // Mirrored into stored properties rather than read through computed ones:
+    // VaultCrypto's state lives outside the observation system, so a computed
+    // property would not re-render the gate when it changes.
+    var isVaultConfigured = VaultCrypto.isConfigured
+    var isVaultUnlocked = VaultCrypto.isUnlocked
+    var showVaultSetup = false
+    /// Set after first-time setup so the caller can offer the sweep at the one
+    /// moment the user is already thinking about it.
+    var offerEncryptExisting = false
+
+    /// The whole app sits behind this. Gating once at the door beats scattering
+    /// lock checks through every read: if you are looking at the list, the vault
+    /// is open, and export, reveal and edit all just work.
+    var vaultIsLocked: Bool { isVaultConfigured && !isVaultUnlocked }
+
+    func refreshVaultState() {
+        isVaultConfigured = VaultCrypto.isConfigured
+        isVaultUnlocked = VaultCrypto.isUnlocked
+    }
+
+    func lockVault() {
+        VaultCrypto.lock()
+        refreshVaultState()
+    }
+
+    /// Encrypt whatever is still stored as plaintext. Reports what it did
+    /// rather than claiming success: a sweep in this app has already once
+    /// recorded a clean pass while protecting nothing.
+    func encryptExistingSecrets() async {
+        do {
+            let result = try SecretStore.encryptExistingSecrets()
+            if result.failed > 0 {
+                await appendError("Encrypted \(result.encrypted). \(result.failed) could not be encrypted and are still stored as plain text.")
+            } else if result.encrypted > 0 {
+                await appendError("Encrypted \(result.encrypted) secret(s).")
+            } else {
+                await appendError("Everything was already encrypted.")
+            }
+            await reload()
+        } catch {
+            await appendError(error.localizedDescription)
+        }
+    }
     var settings: AppSettings
     var errorMessage: String? = nil
 
