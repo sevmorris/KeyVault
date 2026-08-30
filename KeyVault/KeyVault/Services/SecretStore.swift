@@ -1,5 +1,4 @@
 import Foundation
-import LocalAuthentication
 import Security
 
 /// Keychain-backed store for the secrets KeyVault *owns* — API keys and notes —
@@ -22,64 +21,8 @@ import Security
 /// is kept only to migrate items written by the old scheme.
 enum SecretStore {
     static let keychainService = "io.github.sevmorris.KeyVault"
-
-    // MARK: - Keychain protection
-    //
-    // Items used to be stored with kSecAttrAccessible and no access control,
-    // which meant any process running as the user could read every note and
-    // API key with no prompt at all:
-    //
-    //   security find-generic-password -s io.github.sevmorris.KeyVault -w
-    //
-    // returned a stored secret directly. The reveal button in KeyDetailView
-    // guards against someone reading the screen; it never guarded against
-    // software.
-    //
-    // The fix is a SecAccessControl requiring user presence — Touch ID, watch,
-    // or the login password — on every read of the payload.
-    //
-    // Note on what was NOT done. The obvious move is the data-protection
-    // keychain, which is what makes a notarytool profile unreadable by the
-    // `security` CLI. It is not reachable here: it needs an application
-    // identifier from a provisioning profile, and this app is built ad-hoc and
-    // signed Developer ID with no profile. Measured, not assumed —
-    //
-    //   ad-hoc, kSecUseDataProtectionKeychain          -> -34018 missing entitlement
-    //   Developer ID, no entitlement                   -> -34018
-    //   Developer ID + keychain-access-groups, no profile -> killed on launch
-    //
-    // whereas a SecAccessControl on this keychain works with no entitlement at
-    // all, and does block the CLI: the same `security` read that returns a
-    // secret instantly for an unprotected item blocks awaiting authentication
-    // for a protected one.
-
-    /// Reused so that reveal-then-copy does not authenticate twice. Short on
-    /// purpose: this is the window in which someone at an already-unlocked Mac
-    /// can read a second secret without touching the sensor again.
-    private static let authContext: LAContext = {
-        let context = LAContext()
-        context.touchIDAuthenticationAllowableReuseDuration = 30
-        return context
-    }()
-
-    private static func accessControl() throws -> SecAccessControl {
-        var error: Unmanaged<CFError>?
-        // ThisDeviceOnly: the secret must not ride an iCloud backup to another
-        // machine. Moving a vault between Macs goes through
-        // VaultExportService, which is the path that has actually been drilled.
-        guard let control = SecAccessControlCreateWithFlags(
-            nil,
-            kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-            .userPresence,
-            &error
-        ) else {
-            throw KeyError.keychainError(errSecParam)
-        }
-        return control
-    }
     private static let legacyMetaDefaultsKey = "APIKeyMeta"
     private static let migrationDoneKey = "SecretStoreMetadataMigrated"
-    private static let accessControlMigrationKey = "SecretStoreAccessControlMigrated"
 
     /// The fields that don't have a dedicated Keychain attribute.
     private struct StoredMeta: Codable {
@@ -91,6 +34,19 @@ enum SecretStore {
     /// Types this store owns. SSH/GPG/Age are handled by their own services.
     static let ownedTypes: Set<KeyType> = [.api, .note]
 
+    // MARK: - Protection
+    //
+    // The payload of every item is encrypted by VaultCrypto before it reaches
+    // the Keychain, so a Keychain dump yields ciphertext. That is the only
+    // mechanism available here — see VaultCrypto for why the two obvious
+    // Keychain-native options are both unreachable without a provisioning
+    // profile, and why an earlier attempt using kSecAttrAccessControl reported
+    // success while protecting nothing.
+    //
+    // Items written before the passphrase was set are plain UTF-8 and still
+    // read correctly; VaultCrypto.isEncrypted tells the two apart on a magic
+    // header rather than by guessing.
+
     // MARK: - Write
 
     static func save(_ key: EncryptionKey, secret: String) throws {
@@ -99,10 +55,8 @@ enum SecretStore {
         }
 
         var query = baseQuery(id: key.id)
-        query[kSecValueData] = secretData
-        // kSecAttrAccessControl replaces kSecAttrAccessible — setting both is
-        // an error, and the access control carries the accessibility itself.
-        query[kSecAttrAccessControl] = try accessControl()
+        query[kSecValueData] = try protectedPayload(secretData)
+        query[kSecAttrAccessible] = kSecAttrAccessibleWhenUnlocked
         attributes(for: key).forEach { query[$0.key] = $0.value }
 
         let status = SecItemAdd(query as CFDictionary, nil)
@@ -122,12 +76,10 @@ enum SecretStore {
             guard let data = newSecret.data(using: .utf8) else {
                 throw KeyError.keychainError(errSecParam)
             }
-            changes[kSecValueData] = data
+            changes[kSecValueData] = try protectedPayload(data)
         }
-        // Editing an item written before access control existed upgrades it in
-        // place, so the vault protects itself as you touch it rather than
-        // waiting on a migration to sweep everything.
-        changes[kSecAttrAccessControl] = try accessControl()
+        // Editing an item written before the passphrase was set encrypts it on
+        // the way back down, so the vault protects itself as you touch it.
 
         let status = SecItemUpdate(baseQuery(id: key.id) as CFDictionary,
                                    changes as CFDictionary)
@@ -145,55 +97,59 @@ enum SecretStore {
         }
     }
 
-    // MARK: - Access control migration
+    // MARK: - Encryption migration
 
-    /// One-time sweep applying the access control to items written before it
-    /// existed. Runs from `loadAll`, so it happens on the first read after the
-    /// update rather than needing to be found in a menu.
+    /// Encrypt every item still stored as plaintext.
     ///
-    /// Safe to interrupt. SecItemUpdate applies kSecAttrAccessControl in place,
-    /// so each item is atomic: nothing is deleted, there is no window where an
-    /// item does not exist, and no secret is read into memory to do it — the
-    /// sweep never asks for kSecReturnData. Verified rather than assumed: an
-    /// item updated this way stops being readable by
-    /// `security find-generic-password -w`, which is the whole point.
+    /// Deliberately NOT automatic. It is one-way — afterwards the vault cannot
+    /// be read without the passphrase — and an earlier automatic sweep in this
+    /// file recorded success while doing nothing at all. This one is invoked
+    /// explicitly, after an export, and reports what it actually did.
     ///
-    /// The flag is set only after a clean sweep. A partial run — a locked
-    /// keychain, an item that refuses — retries on the next launch instead of
-    /// recording success and leaving the stragglers unprotected forever.
-    static func migrateToAccessControlIfNeeded() {
-        let defaults = UserDefaults.standard
-        guard !defaults.bool(forKey: accessControlMigrationKey) else { return }
-        guard let control = try? accessControl() else { return }
+    /// Each item is one SecItemUpdate of its payload, so the work is atomic per
+    /// item and an interruption leaves the rest untouched and re-runnable.
+    @discardableResult
+    static func encryptExistingSecrets() throws -> (encrypted: Int, alreadyDone: Int, failed: Int) {
+        guard VaultCrypto.isUnlocked else { throw VaultCrypto.CryptoError.locked }
 
-        let ids = allAccountIDs()
-        guard !ids.isEmpty else {
-            // Nothing to protect: an empty vault is migrated by definition, and
-            // recording that keeps the sweep from re-running on every read.
-            defaults.set(true, forKey: accessControlMigrationKey)
-            return
-        }
+        var encrypted = 0, alreadyDone = 0, failed = 0
 
-        var failed = 0
-        for id in ids {
-            let status = SecItemUpdate(
-                baseQuery(id: id) as CFDictionary,
-                [kSecAttrAccessControl: control] as CFDictionary
-            )
-            // errSecItemNotFound: deleted between enumeration and update. Not a
-            // failure — there is nothing left to protect.
-            if status != errSecSuccess && status != errSecItemNotFound {
+        for id in allAccountIDs() {
+            guard let blob = rawPayload(for: id) else { failed += 1; continue }
+            if VaultCrypto.isEncrypted(blob) { alreadyDone += 1; continue }
+
+            guard let plaintext = String(data: blob, encoding: .utf8),
+                  let sealed = try? VaultCrypto.encrypt(plaintext) else {
+                failed += 1
+                continue
+            }
+            let status = SecItemUpdate(baseQuery(id: id) as CFDictionary,
+                                       [kSecValueData: sealed] as CFDictionary)
+            if status == errSecSuccess {
+                // Read back before counting it: this file has already shipped a
+                // sweep that trusted errSecSuccess and protected nothing.
+                if let check = rawPayload(for: id), VaultCrypto.isEncrypted(check) {
+                    encrypted += 1
+                } else {
+                    failed += 1
+                }
+            } else {
                 failed += 1
             }
         }
+        return (encrypted, alreadyDone, failed)
+    }
 
-        if failed == 0 {
-            defaults.set(true, forKey: accessControlMigrationKey)
+    /// How many items are still stored as plaintext.
+    static func plaintextCount() -> Int {
+        allAccountIDs().reduce(into: 0) { count, id in
+            if let blob = rawPayload(for: id), !VaultCrypto.isEncrypted(blob) { count += 1 }
         }
     }
 
-    /// Account UUIDs for every item this store owns. Attributes only — the
-    /// sweep must not pull secrets into memory to do its job.
+    /// Account UUIDs for every item this store owns. The salt and verifier
+    /// VaultCrypto keeps alongside them are filtered out for free: their
+    /// accounts are names, not UUIDs.
     private static func allAccountIDs() -> [UUID] {
         let query: [CFString: Any] = [
             kSecClass: kSecClassGenericPassword,
@@ -213,23 +169,43 @@ enum SecretStore {
         }
     }
 
+    private static func rawPayload(for id: UUID) -> Data? {
+        var query = baseQuery(id: id)
+        query[kSecReturnData] = true
+        query[kSecMatchLimit] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess else { return nil }
+        return result as? Data
+    }
+
+    /// Encrypt when a passphrase is configured and the vault is open. Before
+    /// that, storage is plaintext exactly as it always was — the app has to
+    /// keep working for someone who has not set one yet.
+    private static func protectedPayload(_ plaintext: Data) throws -> Data {
+        guard VaultCrypto.isConfigured else { return plaintext }
+        guard VaultCrypto.isUnlocked else { throw VaultCrypto.CryptoError.locked }
+        guard let text = String(data: plaintext, encoding: .utf8) else {
+            throw KeyError.keychainError(errSecParam)
+        }
+        return try VaultCrypto.encrypt(text)
+    }
+
     // MARK: - Read
 
     /// Reading the payload is what triggers authentication — `loadAll` reads
     /// attributes only and stays silent, so browsing the list never prompts and
     /// revealing a secret does.
     static func loadSecret(for id: UUID) throws -> String {
-        var query = baseQuery(id: id)
-        query[kSecReturnData] = true
-        query[kSecMatchLimit] = kSecMatchLimitOne
-        query[kSecUseAuthenticationContext] = authContext
-
-        var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess,
-              let data = result as? Data,
-              let secret = String(data: data, encoding: .utf8) else {
-            throw KeyError.keychainError(status)
+        guard let data = rawPayload(for: id) else {
+            throw KeyError.keychainError(errSecItemNotFound)
+        }
+        if VaultCrypto.isEncrypted(data) {
+            return try VaultCrypto.decrypt(data)
+        }
+        // Written before a passphrase was set. Still readable, and still
+        // exposed — encryptExistingSecrets() is what fixes that.
+        guard let secret = String(data: data, encoding: .utf8) else {
+            throw KeyError.keychainError(errSecDecode)
         }
         return secret
     }
@@ -238,7 +214,6 @@ enum SecretStore {
     /// Pass a type to filter; nil returns all owned types.
     static func loadAll(of type: KeyType? = nil) -> [EncryptionKey] {
         migrateLegacyMetadataIfNeeded()
-        migrateToAccessControlIfNeeded()
 
         // Attributes only — never kSecReturnData, so enumerating the vault
         // neither authenticates nor puts a secret in memory. Browsing the list
