@@ -11,9 +11,24 @@ struct KeyListView: View {
             } else if viewModel.filteredKeys.isEmpty {
                 EmptyStateView(type: viewModel.selectedType)
             } else {
-                List(viewModel.filteredKeys, selection: $viewModel.selectedKeyID) { key in
-                    KeyRowView(key: key)
-                        .tag(key.id)
+                List(selection: $viewModel.selectedKeyID) {
+                    // Notes group under their category; everything else stays a
+                    // flat list, because only notes have one. A vault with no
+                    // categories set yet renders as a single unlabelled group,
+                    // which is exactly the old appearance.
+                    if viewModel.selectedType == .note && viewModel.hasAnyCategory {
+                        ForEach(viewModel.groupedNotes, id: \.name) { group in
+                            Section(group.name) {
+                                ForEach(group.keys) { key in
+                                    KeyRowView(key: key).tag(key.id)
+                                }
+                            }
+                        }
+                    } else {
+                        ForEach(viewModel.filteredKeys) { key in
+                            KeyRowView(key: key).tag(key.id)
+                        }
+                    }
                 }
                 .listStyle(.inset)
             }

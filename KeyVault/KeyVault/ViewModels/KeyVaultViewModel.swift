@@ -84,6 +84,67 @@ final class KeyVaultViewModel {
         allKeys.first { $0.id == selectedKeyID }
     }
 
+    // MARK: - Note categories
+
+    struct NoteGroup {
+        let name: String
+        let keys: [EncryptionKey]
+    }
+
+    /// Uncategorised notes sort last under their own heading rather than being
+    /// hidden or lumped into the first real category.
+    static let uncategorisedLabel = "Uncategorised"
+
+    var hasAnyCategory: Bool {
+        filteredKeys.contains { $0.category?.isEmpty == false }
+    }
+
+    var groupedNotes: [NoteGroup] {
+        let buckets = Dictionary(grouping: filteredKeys) { key -> String in
+            let c = key.category?.trimmingCharacters(in: .whitespaces) ?? ""
+            return c.isEmpty ? Self.uncategorisedLabel : c
+        }
+        return buckets
+            .map { NoteGroup(name: $0.key, keys: $0.value.sorted {
+                $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+            }) }
+            .sorted { a, b in
+                if a.name == Self.uncategorisedLabel { return false }
+                if b.name == Self.uncategorisedLabel { return true }
+                return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+            }
+    }
+
+    var showBulkCategorise = false
+
+    /// Write the categories chosen in the bulk screen.
+    ///
+    /// Only notes whose category actually changed are written: each write is a
+    /// Keychain update, and re-writing 24 items to change three is both slower
+    /// and more chances to fail for no reason.
+    func applyCategories(_ assignments: [UUID: String]) async {
+        var updated = 0, failed = 0
+        for var note in allKeys where note.type == .note {
+            let wanted = (assignments[note.id] ?? "").trimmingCharacters(in: .whitespaces)
+            let current = (note.category ?? "").trimmingCharacters(in: .whitespaces)
+            guard wanted != current else { continue }
+            note.category = wanted.isEmpty ? nil : wanted
+            do {
+                // Metadata only — passing nil leaves the stored secret alone, so
+                // filing a note never risks the thing the note exists to hold.
+                try SecretStore.update(note, newSecret: nil)
+                updated += 1
+            } catch {
+                failed += 1
+                await appendError("\(note.name): \(error.localizedDescription)")
+            }
+        }
+        if failed == 0 && updated > 0 {
+            await appendError("Filed \(updated) note(s).")
+        }
+        await reload()
+    }
+
     func keyCount(for type: KeyType) -> Int {
         allKeys.filter { $0.type == type }.count
     }

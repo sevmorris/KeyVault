@@ -32,6 +32,8 @@ struct KeyVaultApp: App {
 
             CommandGroup(after: .saveItem) {
                 Divider()
+                Button("Organise Notes…") { viewModel.showBulkCategorise = true }
+                    .keyboardShortcut("o", modifiers: [.command, .shift])
                 Button("Back Up & Restore…") { viewModel.showBackupSheet = true }
                     .keyboardShortcut("b", modifiers: [.command, .shift])
             }

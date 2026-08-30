@@ -100,6 +100,9 @@ struct ContentView: View {
                 not — this cannot be undone without your passphrase.
                 """)
         }
+        .sheet(isPresented: $viewModel.showBulkCategorise) {
+            BulkCategoriseView(viewModel: viewModel)
+        }
         .sheet(isPresented: $viewModel.showSettings) {
             SettingsView(viewModel: viewModel)
         }

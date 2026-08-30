@@ -10,6 +10,8 @@ struct EncryptionKey: Identifiable, Codable {
     var algorithm: String?
     var path: String?
     var service: String?
+    /// Free-text grouping for notes. nil reads as uncategorised.
+    var category: String?
     var notes: String?
     var createdDate: Date?
     var expiryDate: Date?
@@ -25,6 +27,7 @@ struct EncryptionKey: Identifiable, Codable {
         algorithm: String? = nil,
         path: String? = nil,
         service: String? = nil,
+        category: String? = nil,
         notes: String? = nil,
         createdDate: Date? = nil,
         expiryDate: Date? = nil,
@@ -39,6 +42,7 @@ struct EncryptionKey: Identifiable, Codable {
         self.algorithm = algorithm
         self.path = path
         self.service = service
+        self.category = category
         self.notes = notes
         self.createdDate = createdDate
         self.expiryDate = expiryDate

@@ -29,6 +29,9 @@ enum SecretStore {
         var service: String?
         var notes: String?
         var createdDate: Date?
+        /// Added after the first vaults were written, so it must decode as nil
+        /// from a comment blob that predates it. Optional does that for free.
+        var category: String?
     }
 
     /// Types this store owns. SSH/GPG/Age are handled by their own services.
@@ -198,6 +201,15 @@ enum SecretStore {
                           [kSecAttrAccess: access] as CFDictionary)
     }
 
+    /// Every category currently in use, sorted. Drives the pickers, so the set
+    /// grows from what is actually filed rather than from a hardcoded list.
+    static func knownCategories() -> [String] {
+        let used = loadAll(of: .note).compactMap { $0.category }
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        return Array(Set(used)).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
     /// How many items are still stored as plaintext.
     static func plaintextCount() -> Int {
         allAccountIDs().reduce(into: 0) { count, id in
@@ -317,6 +329,7 @@ enum SecretStore {
             type: type,
             name: item[kSecAttrLabel] as? String ?? "(unnamed)",
             service: meta?.service,
+            category: meta?.category,
             notes: meta?.notes,
             createdDate: meta?.createdDate,
             hasPrivateKey: false
@@ -375,7 +388,8 @@ enum SecretStore {
         ]
         let meta = StoredMeta(service: key.service,
                               notes: key.notes,
-                              createdDate: key.createdDate ?? Date())
+                              createdDate: key.createdDate ?? Date(),
+                              category: key.category)
         if let data = try? JSONEncoder().encode(meta),
            let json = String(data: data, encoding: .utf8) {
             attrs[kSecAttrComment] = json
