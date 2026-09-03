@@ -78,6 +78,15 @@ struct SettingsView: View {
                             }
                             .disabled(viewModel.vaultIsLocked)
                         }
+                        Picker("Lock when idle", selection: $viewModel.settings.idleLockMinutes) {
+                            Text("Never").tag(0)
+                            Text("After 1 minute").tag(1)
+                            Text("After 5 minutes").tag(5)
+                            Text("After 15 minutes").tag(15)
+                            Text("After 30 minutes").tag(30)
+                            Text("After 1 hour").tag(60)
+                        }
+
                         // Reachable while locked — Settings is still on ⌘, —
                         // so it offers the way back in rather than a Lock
                         // button for a vault that is already locked.
@@ -91,6 +100,7 @@ struct SettingsView: View {
                                 viewModel.lockVault()
                                 dismiss()
                             }
+                            .help("Forgets the passphrase — Touch ID cannot reopen it")
                         }
                     } else {
                         Button("Set a Master Passphrase…") {
@@ -102,7 +112,7 @@ struct SettingsView: View {
                     Text("Security")
                 } footer: {
                     Text(viewModel.isVaultConfigured
-                         ? "Secrets are encrypted with your master passphrase before they are stored, so nothing else on this Mac can read them. Repair Keychain Access widens the Keychain permissions on every item, which stops macOS asking for your login password once per note after the app is rebuilt or re-signed."
+                         ? "Secrets are encrypted with your master passphrase before they are stored, so nothing else on this Mac can read them. An idle lock hides the vault and can be reopened with Touch ID; Lock Vault Now forgets the passphrase, so only typing it again will open the vault. Repair Keychain Access widens the Keychain permissions on every item, which stops macOS asking for your login password once per note after the app is rebuilt or re-signed."
                          : "Without a master passphrase, notes and API keys are stored where any process running as you can read them. Setting one encrypts them before they are stored.")
                         .font(.caption)
                         .foregroundStyle(.secondary)

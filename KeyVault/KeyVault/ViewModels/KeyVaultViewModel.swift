@@ -25,6 +25,14 @@ final class KeyVaultViewModel {
     // property would not re-render the gate when it changes.
     var isVaultConfigured = VaultCrypto.isConfigured
     var isVaultUnlocked = VaultCrypto.isUnlocked
+    /// Whether the vault was shut by the idle timer rather than properly
+    /// locked — the one state a fingerprint can reopen.
+    var isVaultSuspended = VaultCrypto.isSuspended
+    /// Refreshed alongside the lock state rather than read from a view body:
+    /// this puts a real question to LocalAuthentication, and a body can run
+    /// many times over. Every transition that can show the locked screen goes
+    /// through `refreshVaultState()`, so it is current when it is read.
+    var isBiometricsAvailable = false
     var showVaultSetup = false
     /// Whether the passphrase prompt is on screen. Raised at launch when the
     /// vault is locked, but it is a door you are allowed to walk away from:
@@ -43,16 +51,58 @@ final class KeyVaultViewModel {
     func refreshVaultState() {
         isVaultConfigured = VaultCrypto.isConfigured
         isVaultUnlocked = VaultCrypto.isUnlocked
+        isVaultSuspended = VaultCrypto.isSuspended
+        isBiometricsAvailable = BiometricAuth.isAvailable
     }
 
     func lockVault() {
         VaultCrypto.lock()
         refreshVaultState()
-        // Shutting the door has to empty the room as well. The rows carry
-        // names, services and categories in the clear, and leaving them in
-        // memory behind a locked screen is most of what locking was for.
+        clearLoadedSecrets()
+    }
+
+    /// The idle lock. The screen clears exactly as it does for a real lock —
+    /// what differs is that the key is set aside rather than forgotten, so
+    /// Touch ID can put it back. See `VaultCrypto.suspend()`.
+    func idleLockVault() {
+        guard !vaultIsLocked else { return }
+        VaultCrypto.suspend()
+        refreshVaultState()
+        clearLoadedSecrets()
+    }
+
+    /// Bring back a vault the idle timer shut. Answers false without comment
+    /// when there is nothing to resume, which is every case except that one.
+    @discardableResult
+    func resumeWithBiometrics() async -> Bool {
+        guard VaultCrypto.isSuspended else { return false }
+        switch await BiometricAuth.authenticate(reason: "unlock your vault") {
+        case .success:
+            VaultCrypto.resume()
+            vaultDidUnlock()
+            await reload()
+            return true
+        case .cancelled:
+            return false
+        case .failed(let message):
+            await appendError(message)
+            return false
+        }
+    }
+
+    /// Shutting the door has to empty the room as well. The rows carry names,
+    /// services and categories in the clear, and leaving them in memory behind
+    /// a locked screen is most of what locking was for.
+    private func clearLoadedSecrets() {
         allKeys.removeAll { SecretStore.ownedTypes.contains($0.type) }
         selectedKeyID = nil
+    }
+
+    /// Whether the locked screen should offer a fingerprint. Both halves
+    /// matter: a vault that was properly locked cannot be reopened this way at
+    /// all, and a Mac with no enrolled finger must not advertise it.
+    var canResumeWithBiometrics: Bool {
+        isVaultSuspended && isBiometricsAvailable
     }
 
     /// Encrypt whatever is still stored as plaintext. Reports what it did
@@ -76,6 +126,7 @@ final class KeyVaultViewModel {
     var settings: AppSettings
     var errorMessage: String? = nil
 
+    private let idleWatcher = IdleWatcher()
     private let exportService = VaultExportService()
     private let sshService = SSHService()
     private let gpgService = GPGService()
@@ -89,6 +140,13 @@ final class KeyVaultViewModel {
         // Asked for once, at launch, rather than presented by a binding that
         // re-raises it the instant it is dismissed.
         self.showVaultUnlock = VaultCrypto.isConfigured && !VaultCrypto.isUnlocked
+
+        idleWatcher.idleLimit = { [weak self] in
+            guard let self, settings.idleLockMinutes > 0 else { return nil }
+            return TimeInterval(settings.idleLockMinutes * 60)
+        }
+        idleWatcher.onIdle = { [weak self] in self?.idleLockVault() }
+        idleWatcher.start()
     }
 
     var filteredKeys: [EncryptionKey] {
@@ -187,6 +245,13 @@ final class KeyVaultViewModel {
 
     func keyCount(for type: KeyType) -> Int {
         allKeys.filter { $0.type == type }.count
+    }
+
+    /// Called after any successful unlock, so a vault just opened is not
+    /// measured against however long it sat closed.
+    func vaultDidUnlock() {
+        refreshVaultState()
+        idleWatcher.reset()
     }
 
     func reload() async {

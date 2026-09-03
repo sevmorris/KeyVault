@@ -66,12 +66,59 @@ enum VaultCrypto {
     /// the disk holds ciphertext and a salt, and nothing that decrypts them.
     private static var sessionKey: SymmetricKey?
 
+    /// Set aside by `suspend()`, and the only thing that makes a Touch ID
+    /// resume possible. It is still just memory — nothing here is ever written
+    /// down, which is why this can only bring back a vault that was open in
+    /// this same run of the app.
+    private static var suspendedKey: SymmetricKey?
+
     static var isUnlocked: Bool { sessionKey != nil }
+
+    /// True when the vault was closed by the idle timer rather than forgotten.
+    static var isSuspended: Bool { suspendedKey != nil }
 
     /// True once a passphrase has been set — i.e. a salt and verifier exist.
     static var isConfigured: Bool { loadBlob(account: saltAccount) != nil }
 
-    static func lock() { sessionKey = nil }
+    /// A real lock: the key is gone, and only the passphrase derives it again.
+    static func lock() {
+        sessionKey = nil
+        suspendedKey = nil
+    }
+
+    /// The one place a key becomes the session key, so "at most one copy of it
+    /// exists" holds by construction. A passphrase unlock after an idle lock
+    /// has to drop the suspended copy: leaving it there would keep a second
+    /// key in memory for the life of the process, and leave the vault
+    /// describing itself as resumable when it had already been reopened.
+    private static func adopt(_ key: SymmetricKey) {
+        sessionKey = key
+        suspendedKey = nil
+    }
+
+    /// The idle lock. Deliberately weaker than `lock()` — it hides the vault
+    /// rather than forgetting it, holding the key in memory so a fingerprint
+    /// can put it back.
+    ///
+    /// The distinction is the whole reason Touch ID can be offered at all. A
+    /// fingerprint is a yes/no, not a secret to derive a key from, so unlocking
+    /// with one at cold start would mean keeping the key on disk — which is
+    /// exactly what this file exists to avoid. Within one run there is already
+    /// a key in memory, so nothing new is written anywhere.
+    static func suspend() {
+        guard let key = sessionKey else { return }
+        suspendedKey = key
+        sessionKey = nil
+    }
+
+    /// Put a suspended key back. Authenticating is the caller's job; this only
+    /// moves the key, and does nothing at all if the vault was properly locked.
+    @discardableResult
+    static func resume() -> Bool {
+        guard let key = suspendedKey else { return false }
+        adopt(key)
+        return true
+    }
 
     // MARK: - Passphrase
 
@@ -91,7 +138,7 @@ enum VaultCrypto {
 
         try storeBlob(salt, account: saltAccount)
         try storeBlob(verifier, account: verifierAccount)
-        sessionKey = key
+        adopt(key)
     }
 
     /// Derive and check against the stored verifier. Returns false rather than
@@ -108,7 +155,7 @@ enum VaultCrypto {
               opened == verifierPlaintext else {
             return false
         }
-        sessionKey = key
+        adopt(key)
         return true
     }
 

@@ -38,14 +38,14 @@ struct ContentView: View {
         .sheet(isPresented: $viewModel.showVaultUnlock) {
             VaultLockView(mode: .unlock, onSuccess: { _ in
                 viewModel.showVaultUnlock = false
-                viewModel.refreshVaultState()
+                viewModel.vaultDidUnlock()
                 Task { await viewModel.reload() }
             }, onCancel: { viewModel.showVaultUnlock = false })
         }
         .sheet(isPresented: $viewModel.showVaultSetup) {
             VaultLockView(mode: .setup, onSuccess: { wasSetup in
                 viewModel.showVaultSetup = false
-                viewModel.refreshVaultState()
+                viewModel.vaultDidUnlock()
                 viewModel.offerEncryptExisting = wasSetup
             }, onCancel: { viewModel.showVaultSetup = false })
         }
