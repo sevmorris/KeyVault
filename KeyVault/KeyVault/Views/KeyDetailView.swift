@@ -8,9 +8,9 @@ struct KeyDetailView: View {
     @State private var deleteError: String?
     @State private var copied = false
 
-    /// Held only while revealed, and dropped the moment the pane changes key.
-    /// Loading it on appear would keep every secret you browsed past sitting
-    /// in memory for the life of the window.
+    /// Held only while revealed, and dropped the moment the pane changes key,
+    /// so at most one secret is in memory at a time rather than every one you
+    /// browsed past staying there for the life of the window.
     @State private var revealedSecret: String?
     @State private var secretError: String?
     @State private var copiedSecret = false
@@ -35,20 +35,21 @@ struct KeyDetailView: View {
             .padding(20)
         }
         .navigationTitle(key.name)
+        .onAppear { revealIfUnlocked() }
         // Selecting a different item must not leave the previous secret on
-        // screen, or in memory.
+        // screen, or in memory. Cleared here rather than in a .task keyed on
+        // the id, which would let the old value render once in the new item's
+        // pane before it was replaced.
         .onChange(of: key.id) {
-            revealedSecret = nil
-            secretError = nil
-            copiedSecret = false
+            forgetSecret()
+            revealIfUnlocked()
         }
         .sheet(isPresented: $showEditNote) {
             // A saved edit replaces the stored secret, so anything revealed
-            // before it is now stale. Drop it rather than leave the old value
+            // before it is now stale. Re-read rather than leave the old value
             // sitting on screen looking current.
-            revealedSecret = nil
-            secretError = nil
-            copiedSecret = false
+            forgetSecret()
+            revealIfUnlocked()
         } content: {
             AddNoteView(viewModel: viewModel, editing: key)
         }
@@ -78,10 +79,13 @@ struct KeyDetailView: View {
 
     // MARK: - Secret
 
-    /// Hidden until asked for. A vault that shows its contents to anyone who
-    /// clicks a row is a vault in name only — and unlike a password field,
-    /// these are often long enough that revealing them is a deliberate act
-    /// rather than a glance.
+    /// Shown once the vault is open, and hidden whenever it is not.
+    ///
+    /// It used to take a click per item, on the reasoning that a vault which
+    /// shows its contents to anyone who clicks a row is a vault in name only.
+    /// But the passphrase already is that click: past the door, asking again
+    /// per note was friction with nothing behind it. Hide is still there for
+    /// the moment someone is standing behind you.
     @ViewBuilder private var secretSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -122,6 +126,20 @@ struct KeyDetailView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    /// Read the secret for the item now on screen, if there is one to read.
+    /// Nothing is revealed while the vault is locked — the detail pane is not
+    /// reachable in that state, and the value could not be decrypted anyway.
+    private func revealIfUnlocked() {
+        guard SecretStore.ownedTypes.contains(key.type), !viewModel.vaultIsLocked else { return }
+        loadSecret()
+    }
+
+    private func forgetSecret() {
+        revealedSecret = nil
+        secretError = nil
+        copiedSecret = false
     }
 
     private func loadSecret() {
