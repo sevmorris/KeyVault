@@ -4,6 +4,84 @@ struct ContentView: View {
     @Bindable var viewModel: KeyVaultViewModel
 
     var body: some View {
+        Group {
+            // Cancelling the passphrase prompt has to land somewhere honest.
+            // The alternative — the window as normal, every row failing when
+            // opened — would list the name of everything in the vault to
+            // whoever dismissed the prompt, which is most of what they wanted.
+            if viewModel.vaultIsLocked {
+                VaultLockedView(viewModel: viewModel)
+            } else {
+                vault
+            }
+        }
+        .sheet(isPresented: $viewModel.showGenerateSheet) {
+            GenerateKeyView(viewModel: viewModel)
+        }
+        .sheet(isPresented: $viewModel.showImportSheet) {
+            ImportKeyView(viewModel: viewModel)
+        }
+        .sheet(isPresented: $viewModel.showAddAPIKeySheet) {
+            AddAPIKeyView(viewModel: viewModel)
+        }
+        .sheet(isPresented: $viewModel.showAddNoteSheet) {
+            AddNoteView(viewModel: viewModel)
+        }
+        .sheet(isPresented: $viewModel.showBackupSheet) {
+            BackupView(viewModel: viewModel)
+        }
+        // The door — and one you can turn away from. It was previously
+        // presented by a binding on the locked state itself and could not be
+        // dismissed, which made force-quitting the only way to close a vault
+        // you had opened by mistake. Cancelling now leaves the window locked
+        // rather than leaving the app unusable.
+        .sheet(isPresented: $viewModel.showVaultUnlock) {
+            VaultLockView(mode: .unlock, onSuccess: { _ in
+                viewModel.showVaultUnlock = false
+                viewModel.refreshVaultState()
+                Task { await viewModel.reload() }
+            }, onCancel: { viewModel.showVaultUnlock = false })
+        }
+        .sheet(isPresented: $viewModel.showVaultSetup) {
+            VaultLockView(mode: .setup, onSuccess: { wasSetup in
+                viewModel.showVaultSetup = false
+                viewModel.refreshVaultState()
+                viewModel.offerEncryptExisting = wasSetup
+            }, onCancel: { viewModel.showVaultSetup = false })
+        }
+        .alert("Encrypt what is already stored?",
+               isPresented: $viewModel.offerEncryptExisting) {
+            Button("Encrypt Now") { Task { await viewModel.encryptExistingSecrets() } }
+            Button("Later", role: .cancel) { }
+        } message: {
+            Text("""
+                Secrets saved before now are still stored as plain text and \
+                readable by anything running as you. Back up first if you have \
+                not — this cannot be undone without your passphrase.
+                """)
+        }
+        .sheet(isPresented: $viewModel.showBulkCategorise) {
+            BulkCategoriseView(viewModel: viewModel)
+        }
+        .sheet(isPresented: $viewModel.showSettings) {
+            SettingsView(viewModel: viewModel)
+        }
+        .alert("Error", isPresented: .init(
+            get: { viewModel.errorMessage != nil },
+            set: { if !$0 { viewModel.errorMessage = nil } }
+        )) {
+            Button("OK") { viewModel.errorMessage = nil }
+        } message: {
+            Text(viewModel.errorMessage ?? "")
+        }
+        .task {
+            await viewModel.reload()
+        }
+    }
+
+    /// The app proper: sidebar, list, detail, and the toolbar that belongs to
+    /// all three.
+    private var vault: some View {
         NavigationSplitView {
             SidebarView(viewModel: viewModel)
         } content: {
@@ -56,66 +134,6 @@ struct ContentView: View {
                 }
                 .help("Settings")
             }
-        }
-        .sheet(isPresented: $viewModel.showGenerateSheet) {
-            GenerateKeyView(viewModel: viewModel)
-        }
-        .sheet(isPresented: $viewModel.showImportSheet) {
-            ImportKeyView(viewModel: viewModel)
-        }
-        .sheet(isPresented: $viewModel.showAddAPIKeySheet) {
-            AddAPIKeyView(viewModel: viewModel)
-        }
-        .sheet(isPresented: $viewModel.showAddNoteSheet) {
-            AddNoteView(viewModel: viewModel)
-        }
-        .sheet(isPresented: $viewModel.showBackupSheet) {
-            BackupView(viewModel: viewModel)
-        }
-        // The door. Presented whenever a configured vault is locked, and not
-        // dismissible: there is nothing useful to do behind it, and every
-        // reveal, export and edit would fail one at a time instead.
-        .sheet(isPresented: .constant(viewModel.vaultIsLocked)) {
-            VaultLockView(mode: .unlock, onSuccess: { _ in
-                viewModel.refreshVaultState()
-                Task { await viewModel.reload() }
-            }, onCancel: nil)
-            .interactiveDismissDisabled()
-        }
-        .sheet(isPresented: $viewModel.showVaultSetup) {
-            VaultLockView(mode: .setup, onSuccess: { wasSetup in
-                viewModel.showVaultSetup = false
-                viewModel.refreshVaultState()
-                viewModel.offerEncryptExisting = wasSetup
-            }, onCancel: { viewModel.showVaultSetup = false })
-        }
-        .alert("Encrypt what is already stored?",
-               isPresented: $viewModel.offerEncryptExisting) {
-            Button("Encrypt Now") { Task { await viewModel.encryptExistingSecrets() } }
-            Button("Later", role: .cancel) { }
-        } message: {
-            Text("""
-                Secrets saved before now are still stored as plain text and \
-                readable by anything running as you. Back up first if you have \
-                not — this cannot be undone without your passphrase.
-                """)
-        }
-        .sheet(isPresented: $viewModel.showBulkCategorise) {
-            BulkCategoriseView(viewModel: viewModel)
-        }
-        .sheet(isPresented: $viewModel.showSettings) {
-            SettingsView(viewModel: viewModel)
-        }
-        .alert("Error", isPresented: .init(
-            get: { viewModel.errorMessage != nil },
-            set: { if !$0 { viewModel.errorMessage = nil } }
-        )) {
-            Button("OK") { viewModel.errorMessage = nil }
-        } message: {
-            Text(viewModel.errorMessage ?? "")
-        }
-        .task {
-            await viewModel.reload()
         }
     }
 }

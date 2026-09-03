@@ -26,6 +26,11 @@ final class KeyVaultViewModel {
     var isVaultConfigured = VaultCrypto.isConfigured
     var isVaultUnlocked = VaultCrypto.isUnlocked
     var showVaultSetup = false
+    /// Whether the passphrase prompt is on screen. Raised at launch when the
+    /// vault is locked, but it is a door you are allowed to walk away from:
+    /// cancelling leaves the window open and locked rather than holding you
+    /// there until you produce the passphrase or force-quit.
+    var showVaultUnlock = false
     /// Set after first-time setup so the caller can offer the sweep at the one
     /// moment the user is already thinking about it.
     var offerEncryptExisting = false
@@ -43,6 +48,11 @@ final class KeyVaultViewModel {
     func lockVault() {
         VaultCrypto.lock()
         refreshVaultState()
+        // Shutting the door has to empty the room as well. The rows carry
+        // names, services and categories in the clear, and leaving them in
+        // memory behind a locked screen is most of what locking was for.
+        allKeys.removeAll { SecretStore.ownedTypes.contains($0.type) }
+        selectedKeyID = nil
     }
 
     /// Encrypt whatever is still stored as plaintext. Reports what it did
@@ -76,6 +86,9 @@ final class KeyVaultViewModel {
         self.collapsedCategories = Set(
             UserDefaults.standard.stringArray(forKey: Self.collapsedCategoriesKey) ?? []
         )
+        // Asked for once, at launch, rather than presented by a binding that
+        // re-raises it the instant it is dismissed.
+        self.showVaultUnlock = VaultCrypto.isConfigured && !VaultCrypto.isUnlocked
     }
 
     var filteredKeys: [EncryptionKey] {
@@ -183,7 +196,10 @@ final class KeyVaultViewModel {
         async let sshKeys = loadSSH()
         async let gpgKeys = loadGPG()
         async let ageKeys = loadAge()
-        let stored = SecretStore.loadAll()
+        // Nothing stored is read while the vault is locked. The metadata would
+        // load — only the payload is ciphertext — so this is the difference
+        // between a locked vault and one that lists everything in it by name.
+        let stored = vaultIsLocked ? [] : SecretStore.loadAll()
 
         let (ssh, gpg, age) = await (sshKeys, gpgKeys, ageKeys)
         allKeys = ssh + gpg + age + stored

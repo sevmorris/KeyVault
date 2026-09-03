@@ -53,7 +53,8 @@ struct SettingsView: View {
                 Section {
                     if viewModel.isVaultConfigured {
                         LabeledContent("Master passphrase") {
-                            Text("Set").foregroundStyle(.secondary)
+                            Text(viewModel.vaultIsLocked ? "Set — vault locked" : "Set")
+                                .foregroundStyle(.secondary)
                         }
                         if plaintextRemaining > 0 {
                             HStack {
@@ -67,6 +68,7 @@ struct SettingsView: View {
                                         plaintextRemaining = SecretStore.plaintextCount()
                                     }
                                 }
+                                .disabled(viewModel.vaultIsLocked)
                             }
                         } else {
                             Label("All secrets are encrypted", systemImage: "checkmark.seal.fill")
@@ -74,10 +76,21 @@ struct SettingsView: View {
                             Button("Repair Keychain Access") {
                                 Task { await viewModel.encryptExistingSecrets() }
                             }
+                            .disabled(viewModel.vaultIsLocked)
                         }
-                        Button("Lock Vault Now") {
-                            viewModel.lockVault()
-                            dismiss()
+                        // Reachable while locked — Settings is still on ⌘, —
+                        // so it offers the way back in rather than a Lock
+                        // button for a vault that is already locked.
+                        if viewModel.vaultIsLocked {
+                            Button("Unlock Vault…") {
+                                dismiss()
+                                viewModel.showVaultUnlock = true
+                            }
+                        } else {
+                            Button("Lock Vault Now") {
+                                viewModel.lockVault()
+                                dismiss()
+                            }
                         }
                     } else {
                         Button("Set a Master Passphrase…") {

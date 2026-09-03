@@ -379,6 +379,7 @@
   <a href="#overview">Introduction</a>
   <a href="#two-jobs">Managers and Stores</a>
   <a href="#getting-started">Getting Started</a>
+  <a href="#unlocking">Unlocking</a>
   <a class="section-head" href="#">Storing Secrets</a>
   <a href="#notes">Notes</a>
   <a href="#api-keys">API Keys</a>
@@ -417,6 +418,12 @@
     <h2>Getting Started</h2>
     <p>Open KeyVault and the sidebar lists what it found: SSH keys from <code>~/.ssh</code>, GPG keys from your keyring, Age keys from the paths in Settings, plus anything you have stored.</p>
     <p>Add something with the <strong>+</strong> under the list, the toolbar, or <kbd>⌘N</kbd> for a note and <kbd>⇧⌘N</kbd> for an API key.</p>
+  </section>
+
+  <section id="unlocking">
+    <h2>Unlocking</h2>
+    <p>If you have set a master passphrase, KeyVault asks for it at launch, and nothing stored is read until you give it. Not even the names — those are the part of a Keychain item that is never encrypted, so a locked window that listed them would be giving away most of what someone looking over your shoulder wanted.</p>
+    <p>The prompt can be cancelled. The window then sits locked, with an <strong>Unlock…</strong> button in the middle of it, so opening KeyVault by mistake costs a keystroke instead of a passphrase. <kbd>⇧⌘L</kbd> locks and unlocks from the keyboard, and locking clears what was loaded rather than merely covering it.</p>
   </section>
 
   <section id="notes">
