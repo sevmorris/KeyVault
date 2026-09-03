@@ -77,6 +77,8 @@ struct KeyDetailView: View {
         }
     }
 
+    private var screen: PhosphorStyle { viewModel.settings.screenStyle }
+
     // MARK: - Secret
 
     /// Shown once the vault is open, and hidden whenever it is not.
@@ -101,29 +103,31 @@ struct KeyDetailView: View {
                 }
             }
 
-            if let secret = revealedSecret {
+            // One screen in every state, so revealing or hiding does not make
+            // the pane jump — and so there is something to look at either way.
+            PhosphorScreen(style: screen) {
                 ScrollView {
-                    Text(secret)
-                        .font(.system(.body, design: .monospaced))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(8)
+                    VStack(alignment: .leading, spacing: 3) {
+                        if let secret = revealedSecret {
+                            Text(secret)
+                                .font(.system(.body, design: .monospaced))
+                                .textSelection(.enabled)
+                        } else if let secretError {
+                            Text(secretError)
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(screen == .plain ? Color.red : screen.tint)
+                        } else {
+                            Text("— hidden —")
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(screen == .plain ? Color.secondary : screen.tint)
+                                .opacity(0.65)
+                        }
+                        PhosphorCursor(style: screen)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
                 }
                 .frame(maxHeight: 220)
-                .background(Color(nsColor: .textBackgroundColor))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color.secondary.opacity(0.3))
-                )
-            } else if let secretError {
-                Text(secretError)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            } else {
-                Text("Hidden.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -273,12 +277,13 @@ struct KeyDetailView: View {
                 .controlSize(.small)
                 .animation(.easeInOut(duration: 0.2), value: copied)
             }
-            ScrollView(.horizontal, showsIndicators: false) {
-                Text(pubKey)
-                    .font(.system(.caption, design: .monospaced))
-                    .textSelection(.enabled)
-                    .padding(8)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+            PhosphorScreen(style: screen) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    Text(pubKey)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .padding(10)
+                }
             }
         }
     }

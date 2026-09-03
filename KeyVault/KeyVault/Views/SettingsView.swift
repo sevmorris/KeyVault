@@ -51,6 +51,20 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Picker("Secret display", selection: $viewModel.settings.screenStyle) {
+                        ForEach(PhosphorStyle.allCases) { style in
+                            Text(style.label).tag(style)
+                        }
+                    }
+                } header: {
+                    Text("Appearance")
+                } footer: {
+                    Text("How a revealed secret and a public key are drawn. Plain is the ordinary text box; the phosphor styles are a CRT, and change nothing about the text itself.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section {
                     if viewModel.isVaultConfigured {
                         LabeledContent("Master passphrase") {
                             Text(viewModel.vaultIsLocked ? "Set — vault locked" : "Set")
@@ -135,7 +149,7 @@ struct SettingsView: View {
             }
             .padding()
         }
-        .frame(width: 480, height: 360)
+        .frame(width: 480, height: 440)
         .navigationTitle("Settings")
     }
 }

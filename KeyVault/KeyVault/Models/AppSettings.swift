@@ -13,6 +13,10 @@ struct AppSettings: Codable {
     /// paths the user had configured. An Optional decodes as nil instead.
     var autoLockMinutes: Int?
 
+    /// Optional for the same reason as `autoLockMinutes` above: a missing key
+    /// must decode, not throw.
+    var secretDisplayStyle: String?
+
     /// The default lives here rather than in the stored value, so a vault that
     /// has never opened Settings still locks itself.
     static let defaultAutoLockMinutes = 15
@@ -22,10 +26,17 @@ struct AppSettings: Codable {
         set { autoLockMinutes = newValue }
     }
 
+    var screenStyle: PhosphorStyle {
+        get { PhosphorStyle(rawValue: secretDisplayStyle ?? "") ?? .green }
+        set { secretDisplayStyle = newValue.rawValue }
+    }
+
     init(ageKeyPaths: [String] = ["~/.config/sops/age/keys.txt", "~/.age/keys.txt"],
-         autoLockMinutes: Int? = nil) {
+         autoLockMinutes: Int? = nil,
+         secretDisplayStyle: String? = nil) {
         self.ageKeyPaths = ageKeyPaths
         self.autoLockMinutes = autoLockMinutes
+        self.secretDisplayStyle = secretDisplayStyle
     }
 
     static func load() -> AppSettings {
