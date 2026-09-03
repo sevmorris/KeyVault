@@ -18,9 +18,19 @@ struct KeyListView: View {
                     // which is exactly the old appearance.
                     if viewModel.selectedType == .note && viewModel.hasAnyCategory {
                         ForEach(viewModel.groupedNotes, id: \.name) { group in
-                            Section(group.name) {
-                                ForEach(group.keys) { key in
-                                    KeyRowView(key: key).tag(key.id)
+                            Section {
+                                if viewModel.isCategoryExpanded(group.name) {
+                                    ForEach(group.keys) { key in
+                                        KeyRowView(key: key).tag(key.id)
+                                    }
+                                }
+                            } header: {
+                                CategoryHeader(
+                                    name: group.name,
+                                    count: group.keys.count,
+                                    isExpanded: viewModel.isCategoryExpanded(group.name)
+                                ) {
+                                    viewModel.toggleCategory(group.name)
                                 }
                             }
                         }
@@ -85,6 +95,44 @@ struct KeyListView: View {
         .help(help)
     }
 
+}
+
+/// A section header that folds its category away, the way the sidebar's own
+/// sections do.
+///
+/// Drawn rather than delegated to `Section(isExpanded:)` so that it behaves
+/// the same in this list's `.inset` style as it would in a sidebar, and so the
+/// header can carry the count — which is the thing you want to see once a
+/// category is closed.
+private struct CategoryHeader: View {
+    let name: String
+    let count: Int
+    let isExpanded: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        Button {
+            withAnimation(.snappy(duration: 0.18)) { toggle() }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    .frame(width: 10)
+                Text(name)
+                Spacer()
+                Text("\(count)")
+                    .foregroundStyle(.tertiary)
+                    .monospacedDigit()
+            }
+            // The whole width is the hit target, not just the words: a header
+            // you have to aim at is a header you stop using.
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(isExpanded ? "Hide \(name)" : "Show \(name)")
+    }
 }
 
 private struct KeyRowView: View {

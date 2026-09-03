@@ -73,6 +73,9 @@ final class KeyVaultViewModel {
 
     init() {
         self.settings = AppSettings.load()
+        self.collapsedCategories = Set(
+            UserDefaults.standard.stringArray(forKey: Self.collapsedCategoriesKey) ?? []
+        )
     }
 
     var filteredKeys: [EncryptionKey] {
@@ -113,6 +116,30 @@ final class KeyVaultViewModel {
                 if b.name == Self.uncategorisedLabel { return true }
                 return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
             }
+    }
+
+    // MARK: - Category collapse
+
+    /// Collapsed, not expanded, is what gets remembered: a category the user
+    /// has never touched should be open, and so should one that appears later
+    /// because a note was filed under a new name.
+    private static let collapsedCategoriesKey = "CollapsedNoteCategories"
+    private var collapsedCategories: Set<String>
+
+    func isCategoryExpanded(_ name: String) -> Bool {
+        !collapsedCategories.contains(name)
+    }
+
+    func toggleCategory(_ name: String) {
+        if collapsedCategories.contains(name) {
+            collapsedCategories.remove(name)
+        } else {
+            collapsedCategories.insert(name)
+        }
+        // Survives a relaunch. Sorted so the stored array does not churn on
+        // every toggle just because a Set has no order.
+        UserDefaults.standard.set(collapsedCategories.sorted(),
+                                  forKey: Self.collapsedCategoriesKey)
     }
 
     var showBulkCategorise = false
