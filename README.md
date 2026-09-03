@@ -3,9 +3,9 @@
 <p align="center">
   <strong>Key manager and Keychain-backed secret store</strong>
   <br />
-  <strong>Version:</strong> 1.5.0
+  <strong>Version:</strong> 1.6.0
   <br />
-  <a href="https://github.com/sevmorris/KeyVault/releases/latest/download/KeyVault-v1.5.0.dmg"><strong>Download Latest (DMG)</strong></a>
+  <a href="https://github.com/sevmorris/KeyVault/releases/latest/download/KeyVault-v1.6.0.dmg"><strong>Download Latest (DMG)</strong></a>
   ·
   <a href="https://sevmorris.github.io/KeyVault/manual/">Manual</a>
   ·
