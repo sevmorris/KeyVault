@@ -41,8 +41,14 @@ struct KeyDetailView: View {
                     .frame(maxWidth: .infinity, minHeight: 140, maxHeight: .infinity)
             } else if let pubKey = key.publicKey, !pubKey.isEmpty {
                 Divider()
+                // A strip, not a screen. Filling the pane is right for a
+                // secret, which can run to dozens of lines; a public key is
+                // one line that scrolls sideways, and giving it the whole
+                // window left a hand's breadth of text above an acre of empty
+                // phosphor.
                 publicKeySection(pubKey)
-                    .frame(maxWidth: .infinity, minHeight: 140, maxHeight: .infinity)
+                    .frame(maxWidth: .infinity, minHeight: 84, maxHeight: 84)
+                Spacer(minLength: 0)
             } else {
                 Spacer()
             }
@@ -309,7 +315,9 @@ struct KeyDetailView: View {
                     Text(pubKey)
                         .font(PhosphorType.caption)
                         .textSelection(.enabled)
-                        .frame(maxHeight: .infinity, alignment: .topLeading)
+                        // Centred in the strip: one line pinned to the top of
+                        // a short screen leaves the rest of it empty.
+                        .frame(maxHeight: .infinity, alignment: .leading)
                 }
             }
         }

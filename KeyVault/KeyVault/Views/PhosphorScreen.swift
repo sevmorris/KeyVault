@@ -74,11 +74,25 @@ struct TubeFace: InsettableShape {
     var insetAmount: CGFloat = 0
 
     func bow(for size: CGSize) -> CGFloat {
-        min(max(min(size.width, size.height) * bowFraction, 5), 24)
+        let minSide = min(size.width, size.height)
+        let base = min(max(minSide * bowFraction, 5), 24)
+        // Relax the curve as the shape gets extreme. A tube eleven times wider
+        // than it is tall never existed, and bowing one reads as a lozenge
+        // rather than glass — which is exactly what a one-line public key
+        // looked like. Full bow up to 2:1, none past 4:1.
+        let ratio = max(size.width, size.height) / max(minSide, 1)
+        let slack = max(0, min(1, (4 - ratio) / 2))
+        return base * slack
     }
 
     func corner(for size: CGSize) -> CGFloat {
-        min(max(min(size.width, size.height) * cornerFraction, 16), 70)
+        let minSide = min(size.width, size.height)
+        let wanted = min(max(minSide * cornerFraction, 10), 70)
+        // Never more than a sixth of the short side. The floor exists so a
+        // small screen still reads as rounded, but on a wide, shallow strip —
+        // a one-line public key, say — a 16-point radius at each corner of a
+        // 96-point height turns the whole thing into a capsule.
+        return min(wanted, minSide * 0.16)
     }
 
     /// How far a rectangular box has to sit from the edge to look like it
@@ -217,7 +231,10 @@ struct PhosphorScreen<Content: View>: View {
                 // approaches either edge. Straight scanlines over curved glass
                 // give the whole trick away.
                 let fromCentre = (y / size.height) * 2 - 1
-                let bow = min(max(size.width * 0.02, 6), 40)
+                // Tied to the face's own bow rather than computed separately,
+                // so a screen whose curve has relaxed does not keep bending
+                // its scanlines.
+                let bow = face.bow(for: size) * 1.5
                 var line = Path()
                 line.move(to: CGPoint(x: 0, y: y))
                 line.addQuadCurve(
