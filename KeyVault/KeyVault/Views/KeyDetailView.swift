@@ -16,24 +16,41 @@ struct KeyDetailView: View {
     @State private var copiedSecret = false
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                header
+        // Laid out rather than scrolled, so the screen can take everything
+        // left over and be the same size whatever it is showing. It used to
+        // be a 220-point box inside a scroll view, which meant a one-line API
+        // key got a letterbox and a long note got the same letterbox with a
+        // scrollbar.
+        //
+        // The screen is the only flexible thing here: the header, the
+        // metadata and the delete row all take their natural height, so
+        // whatever the pane's size, the difference goes to the glass.
+        VStack(alignment: .leading, spacing: 16) {
+            header
+            Divider()
+            metadata
+                .fixedSize(horizontal: false, vertical: true)
+
+            // Never both: the types this store owns have no public half, and
+            // the ones with a public half are files this app only indexes.
+            if SecretStore.ownedTypes.contains(key.type) {
                 Divider()
-                metadata
-                if SecretStore.ownedTypes.contains(key.type) {
-                    Divider()
-                    secretSection
-                }
-                if let pubKey = key.publicKey, !pubKey.isEmpty {
-                    Divider()
-                    publicKeySection(pubKey)
-                }
+                secretSection
+                    // A floor, so dragging the window short squeezes the
+                    // metadata rather than collapsing the glass to a line.
+                    .frame(maxWidth: .infinity, minHeight: 140, maxHeight: .infinity)
+            } else if let pubKey = key.publicKey, !pubKey.isEmpty {
+                Divider()
+                publicKeySection(pubKey)
+                    .frame(maxWidth: .infinity, minHeight: 140, maxHeight: .infinity)
+            } else {
                 Spacer()
-                deleteSection
             }
-            .padding(20)
+
+            deleteSection
         }
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .navigationTitle(key.name)
         .onAppear { revealIfUnlocked() }
         // Selecting a different item must not leave the previous secret on
@@ -125,9 +142,7 @@ struct KeyDetailView: View {
                         PhosphorCursor(style: screen)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(10)
                 }
-                .frame(maxHeight: 220)
             }
         }
     }
@@ -282,7 +297,7 @@ struct KeyDetailView: View {
                     Text(pubKey)
                         .font(.system(.caption, design: .monospaced))
                         .textSelection(.enabled)
-                        .padding(10)
+                        .frame(maxHeight: .infinity, alignment: .topLeading)
                 }
             }
         }
