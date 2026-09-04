@@ -45,6 +45,18 @@ enum PhosphorStyle: String, CaseIterable, Identifiable {
     }
 }
 
+/// The type the tube is set in.
+///
+/// A couple of points above the system sizes, and kept here rather than at the
+/// call sites so the screens cannot drift apart. The glow is the reason: a
+/// bloom softens the edge of every glyph, so monospaced 13 under one reads
+/// smaller and fuzzier than the same face set plain. The extra points buy back
+/// what the phosphor costs.
+enum PhosphorType {
+    static let body = Font.system(size: 15, design: .monospaced)
+    static let caption = Font.system(size: 13, design: .monospaced)
+}
+
 /// The face of the tube: a rounded rectangle whose edges bow outward, the way
 /// glass does over a deflection yoke.
 ///
@@ -286,7 +298,7 @@ struct PhosphorCursor: View {
     private var block: some View {
         RoundedRectangle(cornerRadius: 1)
             .fill(style.tint)
-            .frame(width: 9, height: 16)
+            .frame(width: 10, height: 18)
             .shadow(color: style.tint.opacity(0.7), radius: 4)
     }
 

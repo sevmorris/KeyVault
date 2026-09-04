@@ -127,15 +127,15 @@ struct KeyDetailView: View {
                     VStack(alignment: .leading, spacing: 3) {
                         if let secret = revealedSecret {
                             Text(secret)
-                                .font(.system(.body, design: .monospaced))
+                                .font(PhosphorType.body)
                                 .textSelection(.enabled)
                         } else if let secretError {
                             Text(secretError)
-                                .font(.system(.caption, design: .monospaced))
+                                .font(PhosphorType.caption)
                                 .foregroundStyle(screen == .plain ? Color.red : screen.tint)
                         } else {
                             Text("— hidden —")
-                                .font(.system(.caption, design: .monospaced))
+                                .font(PhosphorType.caption)
                                 .foregroundStyle(screen == .plain ? Color.secondary : screen.tint)
                                 .opacity(0.65)
                         }
@@ -143,6 +143,18 @@ struct KeyDetailView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                // A stock scrollbar on a phosphor tube is the first thing the
+                // eye finds, and SwiftUI gives no way to tint one — MBM's log
+                // could only fix this by dropping to an NSScroller subclass.
+                // The blinking cursor sits after the last line, so an absent
+                // cursor is the signal that there is more below, and Copy
+                // takes the whole secret regardless of what is in view.
+                //
+                // .never, not .hidden: with "Show scroll bars: Always" set in
+                // System Settings, .hidden leaves the scroller on screen. Only
+                // .never actually removes it, and this was verified against
+                // that setting rather than the default.
+                .scrollIndicators(.never)
             }
         }
     }
@@ -295,7 +307,7 @@ struct KeyDetailView: View {
             PhosphorScreen(style: screen) {
                 ScrollView(.horizontal, showsIndicators: false) {
                     Text(pubKey)
-                        .font(.system(.caption, design: .monospaced))
+                        .font(PhosphorType.caption)
                         .textSelection(.enabled)
                         .frame(maxHeight: .infinity, alignment: .topLeading)
                 }
