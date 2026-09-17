@@ -10,6 +10,12 @@ set -euo pipefail
 
 REPO="sevmorris/KeyVault"
 
+# notarytool keychain profile, shared by every sibling release script. A profile
+# cannot be exported, so a new Mac needs it created again under this name:
+#   xcrun notarytool store-credentials notarytool --apple-id <email> --team-id T9RLNAXPWU
+# Set NOTARY_PROFILE to use another (a Mac still holding the old WoWoNotary one).
+NOTARY_PROFILE="${NOTARY_PROFILE:-notarytool}"
+
 # ── Args ──────────────────────────────────────────────────────────────────────
 if [[ $# -ne 1 ]]; then
     echo "Usage: $0 <version>"
@@ -76,10 +82,22 @@ step "Preflight checks"
 python3 -c "import dmgbuild" 2>/dev/null \
     || fail "python3 module 'dmgbuild' not installed — run: python3 -m pip install dmgbuild"
 
+# Importing dmgbuild does not prove it can run. On 2026-09-16 a pyenv Python
+# built against Xcode 27's macOS 27 SDK, on macOS 26.7, imported it and then
+# segfaulted on its first subprocess — dmgbuild's hdiutil call.
+python3 -c "import subprocess; subprocess.run(['/usr/bin/true'], check=True)" &>/dev/null \
+    || fail "$(command -v python3) cannot start a subprocess, so dmgbuild would crash — rebuild that Python against an SDK no newer than this macOS"
+
 for cmd in xcodebuild hdiutil gh git python3; do
     command -v $cmd &>/dev/null || fail "'$cmd' not found in PATH"
 done
 ok "Tools present"
+
+# A missing profile used to surface at the notarization step, after a clean
+# build — which is how a new Mac found out. Asking costs one API call.
+xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" &>/dev/null \
+    || fail "notarytool profile '$NOTARY_PROFILE' is missing, rejected or unreachable — create it with: xcrun notarytool store-credentials $NOTARY_PROFILE --apple-id <email> --team-id T9RLNAXPWU"
+ok "notarytool profile '$NOTARY_PROFILE' works"
 
 cd "$PROJECT_DIR"
 
@@ -228,8 +246,8 @@ ok "Created $(du -sh "$DMG" | cut -f1) DMG"
 
 # ── Notarize ──────────────────────────────────────────────────────────────────
 step "Notarizing DMG"
-# Reusing 'WoWoNotary' profile
-xcrun notarytool submit "$DMG" --wait --keychain-profile "WoWoNotary"
+# NOTARY_PROFILE is defined at the top and proven usable in preflight.
+xcrun notarytool submit "$DMG" --wait --keychain-profile "$NOTARY_PROFILE"
 xcrun stapler staple "$DMG"
 ok "Notarization complete"
 
