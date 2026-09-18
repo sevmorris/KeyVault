@@ -15,11 +15,14 @@ enum KeyType: String, Codable, CaseIterable {
     case file = "File"
 
     var systemImage: String {
+        // SSH and API keys used to name "folder.badge.key" and
+        // "key.2.on.key.fill", neither of which is an SF Symbol, so their
+        // rows drew no icon at all. Check a new name exists before using it.
         switch self {
-        case .ssh: return "folder.badge.key"
+        case .ssh: return "terminal"
         case .gpg: return "key"
         case .age: return "lock"
-        case .api: return "key.2.on.key.fill"
+        case .api: return "key.2.on.ring.fill"
         case .note: return "doc.text.fill"
         case .file: return "doc.fill"
         }
