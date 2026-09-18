@@ -45,6 +45,9 @@ final class KeyVaultViewModel {
     /// Set after first-time setup so the caller can offer the sweep at the one
     /// moment the user is already thinking about it.
     var offerEncryptExisting = false
+    /// Set when that first-time setup happened inside the Add File sheet. An
+    /// alert cannot appear over the sheet, so the offer waits for it to close.
+    var offerEncryptWhenAddFileCloses = false
 
     /// The whole app sits behind this. Gating once at the door beats scattering
     /// lock checks through every read: if you are looking at the list, the vault

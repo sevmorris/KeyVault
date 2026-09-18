@@ -18,6 +18,9 @@ struct VaultLockView: View {
     /// obviously thinking about it.
     let onSuccess: (_ wasSetup: Bool) -> Void
     let onCancel: (() -> Void)?
+    /// Why the passphrase is being asked for now, when something other than
+    /// Settings asked — Add File, which cannot continue without one.
+    var reason: String? = nil
 
     @State private var passphrase = ""
     @State private var confirmation = ""
@@ -90,13 +93,19 @@ struct VaultLockView: View {
                   systemImage: mode == .setup ? "lock.badge.clock" : "lock.fill")
                 .font(.headline)
 
+            if let reason {
+                Text(reason)
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             if mode == .setup {
                 // Stated before the fields, not after: this is the decision, and
                 // it is not reversible by anything KeyVault can do.
                 Text("""
-                    Your notes and API keys are encrypted with this passphrase \
-                    before they are stored, so nothing else on this Mac can read \
-                    them — not another app, and not a script.
+                    Your notes, API keys and files are encrypted with this \
+                    passphrase before they are stored, so nothing else on this \
+                    Mac can read them — not another app, and not a script.
 
                     There is no way to recover it. If you forget it, the only way \
                     back into your secrets is a Backup & Restore archive and the \

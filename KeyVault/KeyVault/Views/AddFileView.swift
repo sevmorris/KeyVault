@@ -38,10 +38,36 @@ struct AddFileView: View {
     private var isValid: Bool {
         !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && (isEditing || fileURL != nil)
-            && viewModel.isVaultConfigured
     }
 
     var body: some View {
+        if viewModel.isVaultConfigured {
+            form
+        } else {
+            // The passphrase comes first, in this same sheet, and adding the
+            // file carries on once it is set — with a dropped file still
+            // chosen. 1.9.0 closed this sheet to make way for setup instead,
+            // which took the chosen file with it: the passphrase got set, and
+            // the file was never stored.
+            VaultLockView(
+                mode: .setup,
+                onSuccess: { _ in
+                    viewModel.vaultDidUnlock()
+                    viewModel.offerEncryptWhenAddFileCloses = true
+                },
+                onCancel: { dismiss() },
+                reason: setupReason
+            )
+        }
+    }
+
+    private var setupReason: String {
+        let next = initialURL.map { "\($0.lastPathComponent) is added next" } ?? "you choose the file next"
+        return "Files are stored only under a master passphrase, and none is set yet. "
+            + "Set one here, and \(next)."
+    }
+
+    private var form: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(isEditing ? "Edit File" : "Add File")
                 .font(.headline)
@@ -63,10 +89,6 @@ struct AddFileView: View {
                 }
             }
             .formStyle(.grouped)
-
-            if !viewModel.isVaultConfigured {
-                passphraseNeeded
-            }
 
             if let errorMessage {
                 Text(errorMessage)
@@ -136,24 +158,6 @@ struct AddFileView: View {
             in the Trash until the Trash is emptied. Export an encrypted backup \
             before this is the only copy.
             """
-    }
-
-    /// Offered where the question arises. Files have no unencrypted fallback —
-    /// see FileStore — so without a passphrase there is nothing Save could do.
-    private var passphraseNeeded: some View {
-        HStack {
-            Label("Files are stored only under a master passphrase, and none is set yet.",
-                  systemImage: "lock")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Spacer()
-            Button("Set One…") {
-                dismiss()
-                viewModel.showVaultSetup = true
-            }
-            .controlSize(.small)
-        }
-        .padding(.horizontal)
     }
 
     private func describe(_ fileName: String, size: Int?) -> String {

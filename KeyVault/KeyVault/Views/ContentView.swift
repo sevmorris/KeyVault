@@ -29,6 +29,13 @@ struct ContentView: View {
         }
         .sheet(isPresented: $viewModel.showAddFileSheet) {
             viewModel.droppedFileURL = nil
+            // Made only when something is still stored as plain text: on a
+            // vault that held nothing before its first file, the question
+            // would be about nothing.
+            if viewModel.offerEncryptWhenAddFileCloses {
+                viewModel.offerEncryptWhenAddFileCloses = false
+                viewModel.offerEncryptExisting = SecretStore.plaintextCount() > 0
+            }
         } content: {
             AddFileView(viewModel: viewModel, initialURL: viewModel.droppedFileURL)
         }
