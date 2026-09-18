@@ -3,9 +3,9 @@
 <p align="center">
   <strong>Key manager, and an encrypted store for secrets and files</strong>
   <br />
-  <strong>Version:</strong> 1.9.2
+  <strong>Version:</strong> 1.10.0
   <br />
-  <a href="https://github.com/sevmorris/KeyVault/releases/latest/download/KeyVault-v1.9.2.dmg"><strong>Download Latest (DMG)</strong></a>
+  <a href="https://github.com/sevmorris/KeyVault/releases/latest/download/KeyVault-v1.10.0.dmg"><strong>Download Latest (DMG)</strong></a>
   ·
   <a href="https://sevmorris.github.io/KeyVault/manual/">Manual</a>
   ·
