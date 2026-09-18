@@ -31,7 +31,15 @@ struct KeyDetailView: View {
             header
             Divider()
             metadata
-                .fixedSize(horizontal: false, vertical: true)
+                // Priority, not fixedSize. fixedSize made the rows' full height
+                // a floor, and SwiftUI finds a window's minimum size by
+                // offering almost no width — where every value wraps a
+                // character to a line. A stored file's five rows, or an SSH
+                // key's fingerprint and path, then asked for more height than
+                // the screen had, and the window's contents were pushed up and
+                // out of it. Priority still gives the rows their full height
+                // first whenever there is room for it.
+                .layoutPriority(1)
 
             if key.type == .file {
                 Divider()
