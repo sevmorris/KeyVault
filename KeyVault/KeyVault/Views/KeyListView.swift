@@ -3,6 +3,9 @@ import SwiftUI
 struct KeyListView: View {
     @Bindable var viewModel: KeyVaultViewModel
     @State private var isDropTargeted = false
+    /// The note whose New Category… was chosen, while the name is typed.
+    @State private var filingNote: EncryptionKey?
+    @State private var newCategoryName = ""
 
     var body: some View {
         Group {
@@ -22,7 +25,7 @@ struct KeyListView: View {
                             Section {
                                 if viewModel.isCategoryExpanded(group.name) {
                                     ForEach(group.keys) { key in
-                                        KeyRowView(key: key).tag(key.id)
+                                        row(key)
                                     }
                                 }
                             } header: {
@@ -37,7 +40,7 @@ struct KeyListView: View {
                         }
                     } else {
                         ForEach(viewModel.filteredKeys) { key in
-                            KeyRowView(key: key).tag(key.id)
+                            row(key)
                         }
                     }
                 }
@@ -64,6 +67,64 @@ struct KeyListView: View {
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { addBar }
+        .alert("New Category", isPresented: Binding(
+            get: { filingNote != nil },
+            set: { if !$0 { filingNote = nil } }
+        )) {
+            TextField("Category", text: $newCategoryName)
+            Button("File") {
+                let name = newCategoryName.trimmingCharacters(in: .whitespaces)
+                if let note = filingNote, !name.isEmpty {
+                    Task { await viewModel.setCategory(name, for: note) }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("File “\(filingNote?.name ?? "")” under a new category.")
+        }
+    }
+
+    private func row(_ key: EncryptionKey) -> some View {
+        KeyRowView(key: key)
+            .contextMenu {
+                if key.type == .note { categoryMenu(for: key) }
+            }
+            .tag(key.id)
+    }
+
+    /// Control-click on a note files it — under a category already in use,
+    /// under a new one, or under none — and writes it straight away. Only
+    /// notes have categories. Organise Notes is still the way to file many.
+    private func categoryMenu(for key: EncryptionKey) -> some View {
+        let current = key.category?.trimmingCharacters(in: .whitespaces) ?? ""
+        return Menu("Category") {
+            // Toggles, not an inline Picker: the Picker brings separators of
+            // its own, which put a line above the first category and a double
+            // one above New Category….
+            ForEach(viewModel.noteCategories, id: \.self) { category in
+                Toggle(category, isOn: filing(key, under: category, current: current))
+            }
+            Toggle("None", isOn: filing(key, under: "", current: current))
+
+            Divider()
+
+            Button("New Category…") {
+                newCategoryName = ""
+                filingNote = key
+            }
+        }
+    }
+
+    /// Checked where the note is filed now. Choosing another files it there;
+    /// choosing the checked one again does nothing, as in any radio group.
+    private func filing(_ key: EncryptionKey, under category: String, current: String) -> Binding<Bool> {
+        Binding(
+            get: { current == category },
+            set: { on in
+                guard on, current != category else { return }
+                Task { await viewModel.setCategory(category.isEmpty ? nil : category, for: key) }
+            }
+        )
     }
 
     /// The +/- strip under a list is the Mac idiom for "this list is something

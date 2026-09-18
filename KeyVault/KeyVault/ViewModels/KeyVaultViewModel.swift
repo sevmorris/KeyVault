@@ -242,15 +242,40 @@ final class KeyVaultViewModel {
                 failures.append("\(note.name): \(error.localizedDescription)")
             }
         }
-        // Reported after the reload, not before it. reload() starts by
-        // clearing errorMessage, which is where a note that failed to file
-        // used to be reported — so the failure went unseen, the sheet closed
-        // as if it had all worked, and the note kept its old category.
-        await reload()
+        // Refreshed, not reloaded. reload() starts by clearing errorMessage,
+        // which is where a note that failed to file used to be reported — so
+        // the failure went unseen and the note kept its old category — and it
+        // puts a spinner in place of the whole list, which filing one note
+        // from its context menu has no business doing.
+        refreshStoredSecrets()
         forgetCollapsedCategoriesNotInUse()
         if !failures.isEmpty {
             await appendError("Could not file:\n" + failures.joined(separator: "\n"))
         }
+    }
+
+    /// File one note under a category, or under none, straight away: the
+    /// context menu's way in, where Organise Notes files many at once.
+    ///
+    /// Goes through applyCategories with every other note's category as it
+    /// is. That takes the whole picture, and a note left out of it reads as
+    /// uncategorised, so passing just this one would un-file all the rest.
+    func setCategory(_ category: String?, for note: EncryptionKey) async {
+        var assignments: [UUID: String] = [:]
+        for key in allKeys where key.type == .note {
+            assignments[key.id] = key.category ?? ""
+        }
+        assignments[note.id] = category?.trimmingCharacters(in: .whitespaces) ?? ""
+        await applyCategories(assignments)
+    }
+
+    /// Every category a note is filed under, for the context menu. A category
+    /// exists only while a note is filed under it.
+    var noteCategories: [String] {
+        let names = allKeys.filter { $0.type == .note }
+            .compactMap { $0.category?.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        return Set(names).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
     }
 
     /// A category that no note is filed under any more — renamed or removed —
