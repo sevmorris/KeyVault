@@ -61,6 +61,7 @@ actor VaultExportService {
                     type: key.type.rawValue,
                     name: key.name,
                     service: key.service,
+                    category: key.category,
                     notes: key.notes,
                     createdDate: key.createdDate,
                     secret: secret
@@ -196,7 +197,12 @@ actor VaultExportService {
             )
         }
 
-        let existing = Set(SecretStore.loadAll().map(\.id))
+        // Whole items by id, where a set of ids used to do: restoring an item
+        // has to know the category it is already filed under. A repeated id
+        // keeps the first rather than trapping, as `uniqueKeysWithValues`
+        // would — the set this replaced tolerated one too.
+        let existing = Dictionary(SecretStore.loadAll().map { ($0.id, $0) },
+                                  uniquingKeysWith: { first, _ in first })
         var added = 0
         var updated = 0
         var skipped = 0
@@ -227,11 +233,19 @@ actor VaultExportService {
                 type: type,
                 name: item.name,
                 service: item.service,
+                // Absent keeps the stored category rather than clearing it.
+                // An update rewrites all of an item's metadata, and archives
+                // written before categories were exported carry none, so
+                // passing their nil through un-filed every note a restore
+                // touched — rehearsing the drill included. What that gives
+                // up: a note uncategorised in the archive keeps a category it
+                // has been given since.
+                category: item.category ?? existing[item.id]?.category,
                 notes: item.notes,
                 createdDate: item.createdDate,
                 hasPrivateKey: false
             )
-            if existing.contains(item.id) {
+            if existing[item.id] != nil {
                 try SecretStore.update(key, newSecret: item.secret)
                 updated += 1
             } else {

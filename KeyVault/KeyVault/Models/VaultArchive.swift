@@ -68,6 +68,10 @@ struct VaultArchive: Codable {
         var type: String
         var name: String
         var service: String?
+        /// The category a note is filed under. Absent when it has none — and
+        /// from every archive written before categories were exported, which
+        /// is why restore reads absent as "no change", not as "uncategorised".
+        var category: String?
         var notes: String?
         var createdDate: Date?
         /// The secret itself, in the clear. The file's confidentiality comes
