@@ -18,15 +18,15 @@ struct KeyDetailView: View {
     @State private var copiedSecret = false
 
     var body: some View {
-        // Laid out rather than scrolled, so the screen can take everything
-        // left over and be the same size whatever it is showing. It used to
-        // be a 220-point box inside a scroll view, which meant a one-line API
-        // key got a letterbox and a long note got the same letterbox with a
+        // Laid out rather than scrolled, so the box can take everything left
+        // over and be the same size whatever it is showing. It used to be a
+        // 220-point box inside a scroll view, which meant a one-line API key
+        // got a letterbox and a long note got the same letterbox with a
         // scrollbar.
         //
-        // The screen is the only flexible thing here: the header, the
-        // metadata and the delete row all take their natural height, so
-        // whatever the pane's size, the difference goes to the glass.
+        // The box is the only flexible thing here: the header, the metadata
+        // and the delete row all take their natural height, so whatever the
+        // pane's size, the difference goes to the box.
         VStack(alignment: .leading, spacing: 16) {
             header
             Divider()
@@ -37,7 +37,7 @@ struct KeyDetailView: View {
                 Divider()
                 // Keyed on the id, so the next file gets a fresh view rather
                 // than a frame of this one's contents first.
-                FileContentsView(key: key, style: screen)
+                FileContentsView(key: key)
                     .id(key.id)
                     .frame(maxWidth: .infinity, minHeight: 140, maxHeight: .infinity)
             } else if SecretStore.ownedTypes.contains(key.type) {
@@ -47,15 +47,15 @@ struct KeyDetailView: View {
                 Divider()
                 secretSection
                     // A floor, so dragging the window short squeezes the
-                    // metadata rather than collapsing the glass to a line.
+                    // metadata rather than collapsing the box to a line.
                     .frame(maxWidth: .infinity, minHeight: 140, maxHeight: .infinity)
             } else if let pubKey = key.publicKey, !pubKey.isEmpty {
                 Divider()
-                // A strip, not a screen. Filling the pane is right for a
-                // secret, which can run to dozens of lines; a public key is
+                // A strip, not the whole pane. Filling the pane is right for
+                // a secret, which can run to dozens of lines; a public key is
                 // one line that scrolls sideways, and giving it the whole
-                // window left a hand's breadth of text above an acre of empty
-                // phosphor.
+                // window left a hand's breadth of text above an acre of
+                // nothing.
                 publicKeySection(pubKey)
                     .frame(maxWidth: .infinity, minHeight: 84, maxHeight: 84)
                 Spacer(minLength: 0)
@@ -113,8 +113,6 @@ struct KeyDetailView: View {
         }
     }
 
-    private var screen: PhosphorStyle { viewModel.settings.screenStyle }
-
     // MARK: - Secret
 
     /// Shown once the vault is open, and hidden whenever it is not.
@@ -139,41 +137,27 @@ struct KeyDetailView: View {
                 }
             }
 
-            // One screen in every state, so revealing or hiding does not make
-            // the pane jump — and so there is something to look at either way.
-            PhosphorScreen(style: screen) {
+            // One box in every state, so revealing or hiding does not make the
+            // pane jump — and so there is something to look at either way.
+            SecretBox {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 3) {
+                    Group {
                         if let secret = revealedSecret {
                             Text(secret)
-                                .font(PhosphorType.body)
+                                .font(.system(.body, design: .monospaced))
                                 .textSelection(.enabled)
                         } else if let secretError {
                             Text(secretError)
-                                .font(PhosphorType.caption)
-                                .foregroundStyle(screen == .plain ? Color.red : screen.tint)
+                                .font(.callout)
+                                .foregroundStyle(.red)
                         } else {
-                            Text("— hidden —")
-                                .font(PhosphorType.caption)
-                                .foregroundStyle(screen == .plain ? Color.secondary : screen.tint)
-                                .opacity(0.65)
+                            Text("Hidden.")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
                         }
-                        PhosphorCursor(style: screen)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                // A stock scrollbar on a phosphor tube is the first thing the
-                // eye finds, and SwiftUI gives no way to tint one — MBM's log
-                // could only fix this by dropping to an NSScroller subclass.
-                // The blinking cursor sits after the last line, so an absent
-                // cursor is the signal that there is more below, and Copy
-                // takes the whole secret regardless of what is in view.
-                //
-                // .never, not .hidden: with "Show scroll bars: Always" set in
-                // System Settings, .hidden leaves the scroller on screen. Only
-                // .never actually removes it, and this was verified against
-                // that setting rather than the default.
-                .scrollIndicators(.never)
             }
         }
     }
@@ -334,13 +318,13 @@ struct KeyDetailView: View {
                 .controlSize(.small)
                 .animation(.easeInOut(duration: 0.2), value: copied)
             }
-            PhosphorScreen(style: screen) {
-                ScrollView(.horizontal, showsIndicators: false) {
+            SecretBox {
+                ScrollView(.horizontal) {
                     Text(pubKey)
-                        .font(PhosphorType.caption)
+                        .font(.system(.body, design: .monospaced))
                         .textSelection(.enabled)
                         // Centred in the strip: one line pinned to the top of
-                        // a short screen leaves the rest of it empty.
+                        // a short box leaves the rest of it empty.
                         .frame(maxHeight: .infinity, alignment: .leading)
                 }
             }

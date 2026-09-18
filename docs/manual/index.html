@@ -446,7 +446,7 @@
     <p>Some secrets are whole files: a password manager's CSV export, a cloud service-account key, a recovery kit, a scan. <strong>Add File…</strong> stores one, up to 25&nbsp;MB, and so does dropping it on the Files list.</p>
     <p>Files are stored only under a master passphrase. Notes and API keys fall back to plain storage until one is set, so the app keeps working; a file store that did the same would just be a folder, so KeyVault asks you to set the passphrase first.</p>
     <p>Storing a file does not encrypt the original. It is still wherever it was — usually Downloads, if you have just exported it — and readable by anything that looks. <strong>Move the original to the Trash</strong> is on by default for that reason, and it happens only after the stored copy has been written and read back. It goes to the Trash rather than away, so a mistake costs a drag back out, but it stays readable there until the Trash is emptied.</p>
-    <p>Select a stored file and, if it is text, its contents appear on the same screen a note uses — the first 500 lines, which is enough to see that you stored the right thing. A file that is not text shows its name, kind and size. <strong>Save a Copy…</strong> writes the file back out wherever you choose, readable only by you. That copy is not encrypted, so delete it when you are done with it.</p>
+    <p>Select a stored file and, if it is text, its contents are shown the way a note's secret is — the first 500 lines, which is enough to see that you stored the right thing. A file that is not text shows its name, kind and size. <strong>Save a Copy…</strong> writes the file back out wherever you choose, readable only by you. That copy is not encrypted, so delete it when you are done with it.</p>
     <p>KeyVault never opens a stored file in another app. Doing that means decrypting it to a temporary file that outlives the viewing, somewhere you did not choose, for as long as that app keeps it — so the contents are shown from memory, and they leave only when you save a copy yourself.</p>
     <p><strong>Edit</strong> renames a file or changes its notes and leaves its contents alone. To replace a file with a newer one, store the new one and delete the old.</p>
   </section>
@@ -455,7 +455,6 @@
     <h2>Reading a Secret</h2>
     <p>Select the item and the secret is there. Unlocking the vault was the deliberate act; a second click per note added friction with nothing behind it. <strong>Hide</strong> puts one away again for the moment someone is standing behind you, and everything stays hidden while the vault is locked.</p>
     <p>Only one secret is in memory at a time — selecting anything else drops the last one.</p>
-    <p>The screen it is drawn on is a phosphor CRT: green by default, amber under <strong>Settings → Secret display</strong>, or <strong>Plain</strong> for an ordinary text box. It is decoration over the exact characters — nothing about the text changes, and it stays selectable and copyable.</p>
     <p><strong>Copy</strong> marks the clipboard as concealed, which tells clipboard managers not to archive it, and clears the clipboard after 45 seconds — but only if it still holds that secret, so it never wipes something you copied in the meantime.</p>
   </section>
 

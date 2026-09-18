@@ -1,8 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// A stored file's contents: on the tube when they are text, and written back
-/// out on request.
+/// A stored file's contents: shown when they are text, and written back out on
+/// request.
 ///
 /// Nothing here puts the contents on disk unasked. Opening the file in its own
 /// app would mean decrypting it to a temporary file that outlives the viewing —
@@ -15,7 +15,6 @@ import SwiftUI
 /// memory at a time: the same rules the secret pane keeps.
 struct FileContentsView: View {
     let key: EncryptionKey
-    let style: PhosphorStyle
 
     enum Preview: Equatable {
         case hidden
@@ -28,9 +27,9 @@ struct FileContentsView: View {
     @State private var saveStatus: String?
     @State private var saveError: String?
 
-    /// How much of a text file goes on the tube. The screen is for checking you
-    /// stored the right thing, not for reading a ten-thousand-line export, and
-    /// laying all of one out would stall the pane. Save a Copy has the rest.
+    /// How much of a text file is shown. The box is for checking you stored the
+    /// right thing, not for reading a ten-thousand-line export, and laying all
+    /// of one out would stall the pane. Save a Copy has the rest.
     static let previewLineLimit = 500
     static let previewCharacterLimit = 100_000
 
@@ -51,23 +50,19 @@ struct FileContentsView: View {
                 Button("Save a Copy…") { saveCopy() }
             }
 
-            PhosphorScreen(style: style) {
+            SecretBox {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 3) {
-                        screenText
-                        PhosphorCursor(style: style)
+                    VStack(alignment: .leading, spacing: 6) {
+                        boxText
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                // .never rather than .hidden — see the secret pane in
-                // KeyDetailView for why.
-                .scrollIndicators(.never)
             }
-            // A strip, not a screen, when there is nothing to show — for the
-            // same reason a public key gets one: a line of explanation above
-            // an acre of empty phosphor. A text file keeps the whole tube,
-            // hidden or not, so Hide does not make the pane jump.
-            .frame(maxHeight: preview == .binary ? 84 : .infinity)
+            // A strip, not the whole pane, when there is nothing to show — for
+            // the same reason a public key gets one: a line of explanation
+            // above an acre of nothing. A text file keeps the whole box, hidden
+            // or not, so Hide does not make the pane jump.
+            .frame(maxHeight: preview == .binary ? 60 : .infinity)
 
             if let saveStatus {
                 Text(saveStatus)
@@ -86,31 +81,30 @@ struct FileContentsView: View {
         .onAppear { load() }
     }
 
-    @ViewBuilder private var screenText: some View {
+    @ViewBuilder private var boxText: some View {
         switch preview {
         case .text(let text, let truncated):
             Text(text)
-                .font(PhosphorType.body)
+                .font(.system(.body, design: .monospaced))
                 .textSelection(.enabled)
             if truncated {
-                dim("— that is the start of it; Save a Copy has the whole file —")
+                dim("Only the start of the file is shown. Save a Copy has all of it.")
             }
         case .binary:
-            dim("— not text, so not shown here; Save a Copy to open it —")
+            dim("This file is not text, so it is not shown here. Save a Copy to open it.")
         case .failed(let message):
             Text(message)
-                .font(PhosphorType.caption)
-                .foregroundStyle(style == .plain ? Color.red : style.tint)
+                .font(.callout)
+                .foregroundStyle(.red)
         case .hidden:
-            dim("— hidden —")
+            dim("Hidden.")
         }
     }
 
     private func dim(_ text: String) -> some View {
         Text(text)
-            .font(PhosphorType.caption)
-            .foregroundStyle(style == .plain ? Color.secondary : style.tint)
-            .opacity(0.65)
+            .font(.callout)
+            .foregroundStyle(.secondary)
     }
 
     private func load() {
