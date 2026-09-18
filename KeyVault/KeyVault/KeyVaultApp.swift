@@ -30,6 +30,9 @@ struct KeyVaultApp: App {
                 Button("New API Key") { viewModel.showAddAPIKeySheet = true }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
                     .disabled(viewModel.vaultIsLocked)
+                Button("Add File…") { viewModel.showAddFileSheet = true }
+                    .keyboardShortcut("n", modifiers: [.command, .option])
+                    .disabled(viewModel.vaultIsLocked)
                 Divider()
                 Button("Generate Key…") { viewModel.showGenerateSheet = true }
                     .disabled(viewModel.vaultIsLocked)

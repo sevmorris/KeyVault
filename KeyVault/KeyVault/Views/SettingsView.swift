@@ -127,7 +127,7 @@ struct SettingsView: View {
                 } footer: {
                     Text(viewModel.isVaultConfigured
                          ? "Secrets are encrypted with your master passphrase before they are stored, so nothing else on this Mac can read them. An idle lock hides the vault and can be reopened with Touch ID; Lock Vault Now forgets the passphrase, so only typing it again will open the vault. Repair Keychain Access widens the Keychain permissions on every item, which stops macOS asking for your login password once per note after the app is rebuilt or re-signed."
-                         : "Without a master passphrase, notes and API keys are stored where any process running as you can read them. Setting one encrypts them before they are stored.")
+                         : "Without a master passphrase, notes and API keys are stored where any process running as you can read them. Setting one encrypts them before they are stored, and lets KeyVault store files, which it keeps only encrypted.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

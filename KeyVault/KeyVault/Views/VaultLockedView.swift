@@ -82,9 +82,9 @@ struct VaultLockedView: View {
 
     private var subtitle: String {
         if viewModel.isVaultSuspended {
-            return "Your notes and API keys are hidden until you unlock them again."
+            return "Your notes, API keys and files are hidden until you unlock them again."
         }
-        return "Your notes and API keys stay encrypted until you enter the master passphrase."
+        return "Your notes, API keys and files stay encrypted until you enter the master passphrase."
     }
 
     private func authenticate() {

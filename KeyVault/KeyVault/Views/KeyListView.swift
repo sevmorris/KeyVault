@@ -2,6 +2,7 @@ import SwiftUI
 
 struct KeyListView: View {
     @Bindable var viewModel: KeyVaultViewModel
+    @State private var isDropTargeted = false
 
     var body: some View {
         Group {
@@ -43,6 +44,25 @@ struct KeyListView: View {
                 .listStyle(.inset)
             }
         }
+        // Dropping a file on the Files list is the quickest way to store one:
+        // it opens the Add File sheet with the file already chosen, so the
+        // name, the notes and the Trash toggle are still asked about.
+        .dropDestination(for: URL.self) { urls, _ in
+            guard viewModel.selectedType == .file, let url = urls.first else { return false }
+            viewModel.droppedFileURL = url
+            viewModel.showAddFileSheet = true
+            return true
+        } isTargeted: { targeted in
+            isDropTargeted = targeted && viewModel.selectedType == .file
+        }
+        .overlay {
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(Color.accentColor, lineWidth: 2)
+                    .padding(4)
+                    .allowsHitTesting(false)
+            }
+        }
         .safeAreaInset(edge: .bottom, spacing: 0) { addBar }
     }
 
@@ -61,11 +81,14 @@ struct KeyListView: View {
                 addButton("Add Note") { viewModel.showAddNoteSheet = true }
             case .api:
                 addButton("Add API Key") { viewModel.showAddAPIKeySheet = true }
+            case .file:
+                addButton("Add File") { viewModel.showAddFileSheet = true }
             case .none:
                 // Nothing is filtered, so the button has to ask which.
                 Menu {
                     Button("New Note") { viewModel.showAddNoteSheet = true }
                     Button("New API Key") { viewModel.showAddAPIKeySheet = true }
+                    Button("Add File…") { viewModel.showAddFileSheet = true }
                 } label: {
                     Image(systemName: "plus")
                 }
@@ -154,6 +177,9 @@ private struct KeyRowView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                        // A file's line ends in its size, which is the part a
+                        // narrow column would otherwise cut off first.
+                        .truncationMode(key.type == .file ? .middle : .tail)
                 }
             }
 
@@ -169,6 +195,13 @@ private struct KeyRowView: View {
     }
 
     private var subtitle: String? {
+        // The size, and the name the file had when it differs from the one
+        // it is listed under.
+        if let size = key.fileSize {
+            let bytes = size.formatted(.byteCount(style: .file))
+            guard let fileName = key.fileName, fileName != key.name else { return bytes }
+            return "\(fileName) · \(bytes)"
+        }
         if let algo = key.algorithm { return algo }
         if let fp = key.fingerprint { return String(fp.prefix(30)) }
         if let service = key.service { return service }

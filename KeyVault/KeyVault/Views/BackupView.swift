@@ -56,6 +56,8 @@ struct BackupView: View {
                         The archive is OpenPGP (AES-256) and armored, so it is plain text and any \
                         gpg can read it without KeyVault:  gpg --decrypt keyvault-export.asc
 
+                        Stored files go in it too, so it grows by their size.
+
                         Restore adds what is missing and updates what already exists, so importing \
                         the same archive twice is harmless — rehearse it.
                         """)

@@ -15,6 +15,10 @@ struct EncryptionKey: Identifiable, Codable {
     var notes: String?
     var createdDate: Date?
     var expiryDate: Date?
+    /// For a stored file: the name it had on disk, which Save a Copy offers
+    /// back, and its size in bytes.
+    var fileName: String?
+    var fileSize: Int?
     var hasPrivateKey: Bool
 
     init(
@@ -31,6 +35,8 @@ struct EncryptionKey: Identifiable, Codable {
         notes: String? = nil,
         createdDate: Date? = nil,
         expiryDate: Date? = nil,
+        fileName: String? = nil,
+        fileSize: Int? = nil,
         hasPrivateKey: Bool = false
     ) {
         self.id = id
@@ -46,6 +52,8 @@ struct EncryptionKey: Identifiable, Codable {
         self.notes = notes
         self.createdDate = createdDate
         self.expiryDate = expiryDate
+        self.fileName = fileName
+        self.fileSize = fileSize
         self.hasPrivateKey = hasPrivateKey
     }
 }

@@ -27,6 +27,11 @@ struct ContentView: View {
         .sheet(isPresented: $viewModel.showAddNoteSheet) {
             AddNoteView(viewModel: viewModel)
         }
+        .sheet(isPresented: $viewModel.showAddFileSheet) {
+            viewModel.droppedFileURL = nil
+        } content: {
+            AddFileView(viewModel: viewModel, initialURL: viewModel.droppedFileURL)
+        }
         .sheet(isPresented: $viewModel.showBackupSheet) {
             BackupView(viewModel: viewModel)
         }
@@ -108,6 +113,11 @@ struct ContentView: View {
                     Label("Add API Key", systemImage: "key.horizontal")
                 }
                 .help("Add API Key")
+
+                Button { viewModel.showAddFileSheet = true } label: {
+                    Label("Add File", systemImage: "arrow.down.doc")
+                }
+                .help("Add File")
 
                 Button { viewModel.showImportSheet = true } label: {
                     Label("Import Key", systemImage: "square.and.arrow.down")

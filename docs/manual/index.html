@@ -383,6 +383,7 @@
   <a class="section-head" href="#">Storing Secrets</a>
   <a href="#notes">Notes</a>
   <a href="#api-keys">API Keys</a>
+  <a href="#files">Files</a>
   <a href="#reading-back">Reading a Secret</a>
   <a href="#deleting">Deleting</a>
   <a class="section-head" href="#">Backup</a>
@@ -400,7 +401,7 @@
 
   <div class="hero" id="overview">
     <h1>KeyVault</h1>
-    <p>A key manager and a Keychain-backed store for secrets, with encrypted backup that any <code>gpg</code> can read.</p>
+    <p>A key manager and an encrypted store for secrets and files, with a backup that any <code>gpg</code> can read.</p>
     <div class="hero-actions">
       <a class="btn btn-primary" href="https://github.com/sevmorris/KeyVault/releases/latest">Download</a>
       <a class="btn btn-secondary" href="https://github.com/sevmorris/KeyVault">GitHub</a>
@@ -411,13 +412,13 @@
     <h2>Managers and Stores</h2>
     <p>KeyVault does two different jobs behind one window, and the difference decides how careful you need to be.</p>
     <p><strong>SSH, GPG and Age</strong> are <em>managed</em>. The key material already exists — in <code>~/.ssh</code>, in your GPG keyring, in the Age key files you point at under Settings. KeyVault finds it, shows it, and can generate more. It is never the only copy.</p>
-    <p><strong>API Keys and Notes</strong> are <em>stored</em>. These live in the macOS Keychain because KeyVault put them there. For a Note, nothing else holds a copy — which is the whole reason the backup section below exists.</p>
+    <p><strong>Notes, API Keys and Files</strong> are <em>stored</em>. Notes and API keys live in the macOS Keychain because KeyVault put them there; files live encrypted in KeyVault's own folder. For a note, or a file whose original you have deleted, nothing else holds a copy — which is the whole reason the backup section below exists.</p>
   </section>
 
   <section id="getting-started">
     <h2>Getting Started</h2>
     <p>Open KeyVault and the sidebar lists what it found: SSH keys from <code>~/.ssh</code>, GPG keys from your keyring, Age keys from the paths in Settings, plus anything you have stored.</p>
-    <p>Add something with the <strong>+</strong> under the list, the toolbar, or <kbd>⌘N</kbd> for a note and <kbd>⇧⌘N</kbd> for an API key.</p>
+    <p>Add something with the <strong>+</strong> under the list, the toolbar, or <kbd>⌘N</kbd> for a note, <kbd>⇧⌘N</kbd> for an API key and <kbd>⌥⌘N</kbd> for a file. A file can also be dropped on the Files list.</p>
   </section>
 
   <section id="unlocking">
@@ -440,6 +441,16 @@
     <p>Same storage, different question. An API key belongs to a service and fits on one line, so it gets a service field and a masked entry. Use a note instead when the value is long, multi-line, or came out of a file.</p>
   </section>
 
+  <section id="files">
+    <h2>Files</h2>
+    <p>Some secrets are whole files: a password manager's CSV export, a cloud service-account key, a recovery kit, a scan. <strong>Add File…</strong> stores one, up to 25&nbsp;MB, and so does dropping it on the Files list.</p>
+    <p>Files are stored only under a master passphrase. Notes and API keys fall back to plain storage until one is set, so the app keeps working; a file store that did the same would just be a folder, so KeyVault asks you to set the passphrase first.</p>
+    <p>Storing a file does not encrypt the original. It is still wherever it was — usually Downloads, if you have just exported it — and readable by anything that looks. <strong>Move the original to the Trash</strong> is on by default for that reason, and it happens only after the stored copy has been written and read back. It goes to the Trash rather than away, so a mistake costs a drag back out, but it stays readable there until the Trash is emptied.</p>
+    <p>Select a stored file and, if it is text, its contents appear on the same screen a note uses — the first 500 lines, which is enough to see that you stored the right thing. A file that is not text shows its name, kind and size. <strong>Save a Copy…</strong> writes the file back out wherever you choose, readable only by you. That copy is not encrypted, so delete it when you are done with it.</p>
+    <p>KeyVault never opens a stored file in another app. Doing that means decrypting it to a temporary file that outlives the viewing, somewhere you did not choose, for as long as that app keeps it — so the contents are shown from memory, and they leave only when you save a copy yourself.</p>
+    <p><strong>Edit</strong> renames a file or changes its notes and leaves its contents alone. To replace a file with a newer one, store the new one and delete the old.</p>
+  </section>
+
   <section id="reading-back">
     <h2>Reading a Secret</h2>
     <p>Select the item and the secret is there. Unlocking the vault was the deliberate act; a second click per note added friction with nothing behind it. <strong>Hide</strong> puts one away again for the moment someone is standing behind you, and everything stays hidden while the vault is locked.</p>
@@ -450,17 +461,21 @@
 
   <section id="deleting">
     <h2>Deleting</h2>
-    <p>Deleting a note removes it from the Keychain immediately and permanently. There is no trash and no undo, which is why the confirmation says so plainly and why there is no minus button beside the list.</p>
+    <p>Deleting a note removes it from the Keychain immediately and permanently, and deleting a file removes it from KeyVault's folder the same way. There is no trash and no undo, which is why the confirmation says so plainly and why there is no minus button beside the list.</p>
     <p>If you have not exported a backup, cancel and do that first.</p>
   </section>
 
   <section id="backup">
     <h2>Encrypted Export</h2>
     <p>Notes live in the macOS Keychain: encrypted at rest, tied to your login. That protects them from other people. It does not protect them from a dead Mac, and Keychain items do not leave the machine they were made on.</p>
-    <p><strong>Backup &amp; Restore</strong> — in the toolbar, or <kbd>⇧⌘B</kbd> — writes every stored secret to one passphrase-encrypted archive. It is OpenPGP, AES-256, ASCII-armored.</p>
+    <p><strong>Backup &amp; Restore</strong> — in the toolbar, or <kbd>⇧⌘B</kbd> — writes every stored secret and file to one passphrase-encrypted archive. It is OpenPGP, AES-256, ASCII-armored.</p>
     <p>Two properties are deliberate. It is <strong>plain text</strong>, so it survives a password manager field, an email to yourself, or a printer — none of which a binary blob does reliably. And it is <strong>readable without KeyVault</strong>:</p>
     <pre><code>gpg --decrypt keyvault-export.asc &gt; vault.json</code></pre>
     <p>Any GnuPG, on any platform, opens it. Inside is a JSON document with each value in the clear, carrying its own decryption instructions. That is the exit: this app is not somewhere your secrets can get stuck.</p>
+    <p>Stored files are in it too, each one's contents in base64 beside the name it had, and they come back out with nothing but <code>jq</code> and <code>base64</code>. The archive's own instructions say so as well:</p>
+    <pre><code>jq -r '.items[] | select(.fileName == "export.csv") | .secret' \
+  vault.json | base64 --decode &gt; export.csv</code></pre>
+    <p>A file makes the archive larger by about its own size. A few text exports hardly show; a couple of scans and it is no longer something to paste into a password field.</p>
     <p>The passphrase is stored nowhere and cannot be reset. Lose it and the archive is unreadable by you as well as by everyone else.</p>
   </section>
 
@@ -473,7 +488,7 @@
     <h2>The Restore Drill</h2>
     <p>Because restore is idempotent, rehearsing it costs nothing. Do it.</p>
     <p><strong>Nothing should exist only in KeyVault until you have restored an archive somewhere else and read the value back.</strong> An untested backup is not a backup — it is an assumption, and the moment you discover it was wrong is the moment you needed it.</p>
-    <p>The check that matters is not that the file exists. It is that <code>gpg --decrypt</code> outside the app returns the value you put in, character for character.</p>
+    <p>The check that matters is not that the file exists. It is that <code>gpg --decrypt</code> outside the app returns the value you put in, character for character — and, for a stored file, that it writes back out identical to the original.</p>
   </section>
 
   <section id="ssh-gpg-age">
@@ -486,6 +501,8 @@
     <h2>How Storage Works</h2>
     <p>Stored items are <code>kSecClassGenericPassword</code> entries under the service <code>io.github.sevmorris.KeyVault</code>, and each is <strong>self-describing</strong>: the name, type and metadata live in the Keychain item's own attributes.</p>
     <p>That matters more than it sounds. An earlier design kept the index in <code>UserDefaults</code> and only the payload in the Keychain, which meant losing that one file turned every secret into an anonymous blob keyed by an identifier nothing referenced any more. The data survived; the ability to find it did not. Items written under the old scheme are migrated automatically on first launch.</p>
+    <p>Files are not in the Keychain. The login keychain is one database that every app on the Mac reads and writes, made for secrets measured in bytes, and filling it with files would make them every app's problem. Each stored file is instead a single encrypted file in <code>~/Library/Application Support/KeyVault/Files</code>, sealed with AES-256-GCM under the key your master passphrase derives — the same key that encrypts your notes. It is self-describing in the same way: its name, notes and original filename are sealed inside it, so there is no index to lose. Unlike a note's name, nothing about a stored file is readable without the passphrase, not even what it is called.</p>
+    <p>The key that opens that folder comes from your passphrase and a salt kept in the Keychain, so copying the folder to another Mac on its own does not move your files. The encrypted export does.</p>
   </section>
 
   <section id="requirements">

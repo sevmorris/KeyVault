@@ -32,18 +32,20 @@ struct EmptyStateView: View {
         switch type {
         case .note: return "No Notes"
         case .api: return "No API Keys"
+        case .file: return "No Files"
         case .ssh, .gpg, .age: return "No \(type.rawValue) Keys"
         }
     }
 
     private var subtitle: String {
-        guard let type else { return "Add a note or an API key to get started." }
+        guard let type else { return "Add a note, an API key or a file to get started." }
         switch type {
         case .ssh: return "No SSH keys found in ~/.ssh/\nGenerate or import a key to get started."
         case .gpg: return "No GPG keys found.\nMake sure gpg is installed and keys are in your keyring."
         case .age: return "No Age keys found at configured paths.\nGenerate a key or update paths in Settings."
         case .api: return "No API keys stored.\nUse the + button to add an API key."
         case .note: return "No notes stored.\nUse the + button to add a secret note."
+        case .file: return "No files stored.\nUse the + button, or drop a file here, to keep an encrypted copy."
         }
     }
 }

@@ -1,10 +1,12 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct KeyDetailView: View {
     @Bindable var viewModel: KeyVaultViewModel
     let key: EncryptionKey
     @State private var showDeleteConfirm = false
     @State private var showEditNote = false
+    @State private var showEditFile = false
     @State private var deleteError: String?
     @State private var copied = false
 
@@ -31,9 +33,17 @@ struct KeyDetailView: View {
             metadata
                 .fixedSize(horizontal: false, vertical: true)
 
-            // Never both: the types this store owns have no public half, and
-            // the ones with a public half are files this app only indexes.
-            if SecretStore.ownedTypes.contains(key.type) {
+            if key.type == .file {
+                Divider()
+                // Keyed on the id, so the next file gets a fresh view rather
+                // than a frame of this one's contents first.
+                FileContentsView(key: key, style: screen)
+                    .id(key.id)
+                    .frame(maxWidth: .infinity, minHeight: 140, maxHeight: .infinity)
+            } else if SecretStore.ownedTypes.contains(key.type) {
+                // Never both: the types this store owns have no public half,
+                // and the ones with a public half are files this app only
+                // indexes.
                 Divider()
                 secretSection
                     // A floor, so dragging the window short squeezes the
@@ -76,7 +86,10 @@ struct KeyDetailView: View {
         } content: {
             AddNoteView(viewModel: viewModel, editing: key)
         }
-        .alert("Delete Key?", isPresented: $showDeleteConfirm) {
+        .sheet(isPresented: $showEditFile) {
+            AddFileView(viewModel: viewModel, editing: key)
+        }
+        .alert(deleteLabel + "?", isPresented: $showDeleteConfirm) {
             Button("Delete", role: .destructive) {
                 Task {
                     do {
@@ -235,18 +248,19 @@ struct KeyDetailView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            // Notes are the only type KeyVault stores outright, so they are
-            // the only one it can rewrite. SSH and GPG entries are a view onto
-            // files and a keyring that their own tools own; Age is dormant.
-            if key.type == .note {
+            // Notes and files are held outright, so KeyVault can rewrite them.
+            // SSH and GPG entries are a view onto files and a keyring that
+            // their own tools own; Age is dormant. A file's edit is its name
+            // and notes — its contents are replaced by storing it again.
+            if key.type == .note || key.type == .file {
                 Button {
-                    showEditNote = true
+                    if key.type == .note { showEditNote = true } else { showEditFile = true }
                 } label: {
                     Label("Edit", systemImage: "pencil")
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-                .help("Edit this note")
+                .help(key.type == .note ? "Edit this note" : "Rename this file, or change its notes")
             }
         }
     }
@@ -277,6 +291,16 @@ struct KeyDetailView: View {
             }
             if let service = key.service {
                 DetailRow(label: "Service", value: service)
+            }
+            if let fileName = key.fileName {
+                DetailRow(label: "File name", value: fileName)
+                if let kind = UTType(filenameExtension: (fileName as NSString).pathExtension)?
+                    .localizedDescription {
+                    DetailRow(label: "Kind", value: kind)
+                }
+            }
+            if let size = key.fileSize {
+                DetailRow(label: "Size", value: size.formatted(.byteCount(style: .file)))
             }
             if let created = key.createdDate {
                 DetailRow(label: "Created", value: created.formatted(date: .abbreviated, time: .omitted))
@@ -329,12 +353,18 @@ struct KeyDetailView: View {
             Button(role: .destructive) {
                 showDeleteConfirm = true
             } label: {
-                Label("Delete Key", systemImage: "trash")
+                Label(deleteLabel, systemImage: "trash")
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
             .tint(.red)
         }
+    }
+
+    /// "Key" wherever it always said so. A file is not one, and a dialog asking
+    /// whether to delete a key would give pause to someone deleting a CSV.
+    private var deleteLabel: String {
+        key.type == .file ? "Delete File" : "Delete Key"
     }
 
     private var deleteMessage: String {
@@ -354,6 +384,17 @@ struct KeyDetailView: View {
             return """
                 This will permanently delete this note from the Keychain. \
                 Nothing else holds a copy of it, and it cannot be undone.
+
+                If you have not exported an encrypted backup, cancel and do \
+                that first.
+                """
+        case .file:
+            // The same stakes as a note once the original is gone, which is
+            // what storing it here usually meant.
+            return """
+                This will permanently delete this file from KeyVault. If the \
+                original is gone, nothing else holds a copy, and it cannot be \
+                undone.
 
                 If you have not exported an encrypted backup, cancel and do \
                 that first.

@@ -4,7 +4,8 @@ import Foundation
 import Security
 
 /// Encrypts the secrets `SecretStore` owns, under a key derived from a master
-/// passphrase, so that what lands in the Keychain is ciphertext.
+/// passphrase, so that what lands in the Keychain is ciphertext. The files
+/// `FileStore` keeps are sealed under the same key.
 ///
 /// Why this exists rather than a Keychain access control or a Secure Enclave
 /// key, both of which would be less to remember:
@@ -46,6 +47,9 @@ enum VaultCrypto {
         case locked
         case wrongPassphrase
         case malformed
+        /// A sealed blob the vault key will not open. Not `wrongPassphrase`:
+        /// nobody typed one, and the vault it came from is open.
+        case authenticationFailed
         case keychain(OSStatus)
 
         var errorDescription: String? {
@@ -53,6 +57,9 @@ enum VaultCrypto {
             case .locked:         return "The vault is locked."
             case .wrongPassphrase: return "That passphrase is not correct."
             case .malformed:      return "This secret is not in a format KeyVault recognises."
+            case .authenticationFailed:
+                return "The vault's key does not open this. It was written under a different "
+                    + "passphrase, or it has been damaged since."
             case .keychain(let s):
                 let detail = SecCopyErrorMessageString(s, nil) as String?
                 return detail.map { "Keychain error: \($0)" } ?? "Keychain error (OSStatus \(s))"
@@ -182,6 +189,31 @@ enum VaultCrypto {
 
     static func isEncrypted(_ blob: Data) -> Bool {
         blob.count > magic.count && blob.prefix(magic.count) == magic
+    }
+
+    // MARK: - Bytes
+
+    /// Seal bytes rather than text, for `FileStore`. No magic prefix: the file
+    /// format carries its own.
+    ///
+    /// `context` is authenticated but not encrypted, so a sealed blob opens
+    /// only alongside the same context it was sealed with. FileStore passes
+    /// the item's id, which is what stops one file's contents being moved into
+    /// another file and opening there as if they belonged.
+    static func seal(_ plaintext: Data, authenticating context: Data) throws -> Data {
+        guard let key = sessionKey else { throw CryptoError.locked }
+        let sealed = try AES.GCM.seal(plaintext, using: key, authenticating: context)
+        guard let combined = sealed.combined else { throw CryptoError.malformed }
+        return combined
+    }
+
+    static func open(_ combined: Data, authenticating context: Data) throws -> Data {
+        guard let key = sessionKey else { throw CryptoError.locked }
+        guard let box = try? AES.GCM.SealedBox(combined: combined),
+              let opened = try? AES.GCM.open(box, using: key, authenticating: context) else {
+            throw CryptoError.authenticationFailed
+        }
+        return opened
     }
 
     // MARK: - Internals

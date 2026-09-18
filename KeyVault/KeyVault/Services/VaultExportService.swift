@@ -1,6 +1,7 @@
 import Foundation
 
-/// Passphrase-encrypted export and import of everything `SecretStore` owns.
+/// Passphrase-encrypted export and import of everything KeyVault stores —
+/// `SecretStore`'s notes and API keys, and `FileStore`'s files.
 ///
 /// Uses GnuPG symmetric encryption rather than the `age` wrapper this app also
 /// carries, for three reasons: `age` is not installed (`AgeService` would throw
@@ -15,6 +16,11 @@ import Foundation
 /// which a binary blob does reliably.
 actor VaultExportService {
     private let shell = ShellService()
+    private let files: FileStore
+
+    init(files: FileStore = .standard) {
+        self.files = files
+    }
 
     private func gpgPath() throws -> String {
         try GPGLocator.resolve()
@@ -22,14 +28,24 @@ actor VaultExportService {
 
     // MARK: - Export
 
-    /// Encrypt every owned secret to an armored OpenPGP document.
+    /// Encrypt every stored secret and file to an armored OpenPGP document.
     func exportArchive(passphrase: String) async throws -> String {
         guard !passphrase.isEmpty else {
             throw KeyError.exportFailed("A passphrase is required.")
         }
 
         let keys = SecretStore.loadAll()
-        guard !keys.isEmpty else {
+        let stored = files.loadAll()
+        // The same rule as an unreadable secret below, applied before anything
+        // is read: a stored file that will not open is refused by name, never
+        // left out of the archive without a word.
+        guard stored.unreadable.isEmpty else {
+            throw KeyError.exportFailed(
+                "Nothing was exported, because these stored files could not be read:\n"
+                + stored.unreadable.joined(separator: "\n")
+            )
+        }
+        guard !keys.isEmpty || !stored.files.isEmpty else {
             throw KeyError.exportFailed("There is nothing to export yet.")
         }
 
@@ -48,6 +64,20 @@ actor VaultExportService {
                     notes: key.notes,
                     createdDate: key.createdDate,
                     secret: secret
+                )
+            )
+        }
+        for file in stored.files {
+            let contents = try files.loadContents(for: file.id)
+            items.append(
+                VaultArchive.Item(
+                    id: file.id,
+                    type: file.type.rawValue,
+                    name: file.name,
+                    notes: file.notes,
+                    createdDate: file.createdDate,
+                    secret: contents.base64EncodedString(),
+                    fileName: file.fileName
                 )
             )
         }
@@ -143,14 +173,53 @@ actor VaultExportService {
     /// than none; a restore that silently declines to write one is the same
     /// bargain, and the user is equally entitled to hear about it.
     func restore(_ archive: VaultArchive) throws -> (added: Int, updated: Int, skipped: Int) {
+        // Every file is decoded, and the passphrase they need checked for,
+        // before anything is written — so a damaged file, or a vault that
+        // cannot hold one, stops the restore at the door rather than half way
+        // through it.
+        var fileContents: [UUID: Data] = [:]
+        for item in archive.items where item.type == KeyType.file.rawValue {
+            // Whitespace is forgiven — the archive is meant to be editable by
+            // hand, and base64 gets wrapped — but anything else is damage.
+            guard let contents = Data(base64Encoded: item.secret.filter { !$0.isWhitespace }) else {
+                throw KeyError.importFailed(
+                    "\"\(item.name)\" in this archive is not valid base64, so nothing was restored."
+                )
+            }
+            fileContents[item.id] = contents
+        }
+        if !fileContents.isEmpty && !VaultCrypto.isConfigured {
+            throw KeyError.importFailed(
+                "This archive holds \(fileContents.count) file(s), and KeyVault stores files only "
+                + "under a master passphrase. Set one in Settings, then restore again — nothing "
+                + "was restored."
+            )
+        }
+
         let existing = Set(SecretStore.loadAll().map(\.id))
         var added = 0
         var updated = 0
         var skipped = 0
 
         for item in archive.items {
-            guard let type = KeyType(rawValue: item.type), SecretStore.ownedTypes.contains(type) else {
+            guard let type = KeyType(rawValue: item.type), type.isStored else {
                 skipped += 1
+                continue
+            }
+            if type == .file {
+                guard let contents = fileContents[item.id] else { continue }
+                let key = EncryptionKey(
+                    id: item.id,
+                    type: .file,
+                    name: item.name,
+                    notes: item.notes,
+                    createdDate: item.createdDate,
+                    fileName: item.fileName ?? item.name,
+                    hasPrivateKey: false
+                )
+                let existed = files.exists(id: item.id)
+                try files.save(key, contents: contents)
+                if existed { updated += 1 } else { added += 1 }
                 continue
             }
             let key = EncryptionKey(

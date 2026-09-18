@@ -1,6 +1,7 @@
 import Foundation
 
-/// The exported form of everything `SecretStore` owns.
+/// The exported form of everything KeyVault stores: `SecretStore`'s notes and
+/// API keys, and `FileStore`'s files.
 ///
 /// Deliberately a plain, self-describing JSON document rather than anything
 /// clever. This file is the vault's exit: its whole purpose is to be readable
@@ -13,6 +14,10 @@ struct VaultArchive: Codable {
     /// Bumped only for a breaking change to the shape. An importer that does
     /// not recognise the version refuses rather than guesses, because guessing
     /// at the structure of irreplaceable data is how it gets mangled.
+    ///
+    /// Files did not need a bump. A build that predates them decodes a File
+    /// item like any other — its contents are a string, and `fileName` is a
+    /// key it ignores — then skips it as a type it does not know, and says so.
     static let currentFormatVersion = 1
 
     /// Instructions embedded in the payload, so a stranger finding the file
@@ -22,7 +27,11 @@ struct VaultArchive: Codable {
           gpg --decrypt keyvault-export.asc > vault.json
         It is OpenPGP symmetric (AES-256), so any GnuPG on any platform will \
         read it — KeyVault is not required. Inside is this JSON document; each \
-        item's "secret" field is the stored value in plain text.
+        item's "secret" field is the stored value in plain text. An item of \
+        type "File" is a stored file: its "secret" is the file's contents in \
+        base64, and "fileName" is the name it had. To write one back out:
+          jq -r '.items[] | select(.fileName == "export.csv") | .secret' \\
+            vault.json | base64 --decode > export.csv
         """
 
     var formatVersion: Int = currentFormatVersion
@@ -55,7 +64,7 @@ struct VaultArchive: Codable {
 
     struct Item: Codable {
         var id: UUID
-        /// `KeyType` raw value — "Note" or "API Key".
+        /// `KeyType` raw value — "Note", "API Key" or "File".
         var type: String
         var name: String
         var service: String?
@@ -64,6 +73,14 @@ struct VaultArchive: Codable {
         /// The secret itself, in the clear. The file's confidentiality comes
         /// entirely from the encryption around it, which is the property that
         /// makes the archive portable.
+        ///
+        /// For a File, the contents in base64: this is a JSON document, and a
+        /// file is not always text. Carried here rather than in a field of its
+        /// own because every build expects `secret` — one that predates files
+        /// would fail to decode the whole archive over an item without it,
+        /// where it can skip an item it merely does not recognise.
         var secret: String
+        /// For a File, the name it had on disk. Absent for everything else.
+        var fileName: String?
     }
 }

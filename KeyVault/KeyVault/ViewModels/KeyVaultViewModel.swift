@@ -15,6 +15,9 @@ final class KeyVaultViewModel {
     var showImportSheet = false
     var showAddAPIKeySheet = false
     var showAddNoteSheet = false
+    var showAddFileSheet = false
+    /// A file dropped on the list, for the Add File sheet the drop opens.
+    var droppedFileURL: URL?
     var showBackupSheet = false
     var showSettings = false
 
@@ -94,7 +97,7 @@ final class KeyVaultViewModel {
     /// services and categories in the clear, and leaving them in memory behind
     /// a locked screen is most of what locking was for.
     private func clearLoadedSecrets() {
-        allKeys.removeAll { SecretStore.ownedTypes.contains($0.type) }
+        allKeys.removeAll { $0.type.isStored }
         selectedKeyID = nil
     }
 
@@ -128,6 +131,7 @@ final class KeyVaultViewModel {
 
     private let idleWatcher = IdleWatcher()
     private let exportService = VaultExportService()
+    private let fileStore = FileStore.standard
     private let sshService = SSHService()
     private let gpgService = GPGService()
     private let ageService = AgeService()
@@ -264,7 +268,10 @@ final class KeyVaultViewModel {
         // Nothing stored is read while the vault is locked. The metadata would
         // load — only the payload is ciphertext — so this is the difference
         // between a locked vault and one that lists everything in it by name.
-        let stored = vaultIsLocked ? [] : SecretStore.loadAll()
+        var stored: [EncryptionKey] = []
+        if !vaultIsLocked {
+            stored = SecretStore.loadAll() + (await loadFiles())
+        }
 
         let (ssh, gpg, age) = await (sshKeys, gpgKeys, ageKeys)
         allKeys = ssh + gpg + age + stored
@@ -289,6 +296,18 @@ final class KeyVaultViewModel {
         }
     }
 
+    /// Stored files, with any that will not open named rather than dropped. A
+    /// file missing from this list is missing from the backup too, which is
+    /// why the export refuses outright in the same situation.
+    private func loadFiles() async -> [EncryptionKey] {
+        let listing = fileStore.loadAll()
+        if !listing.unreadable.isEmpty {
+            await appendError("Files that could not be read:\n"
+                              + listing.unreadable.joined(separator: "\n"))
+        }
+        return listing.files
+    }
+
     private func loadAge() async -> [EncryptionKey] {
         do {
             return try await ageService.loadKeys(from: settings.ageKeyPaths)
@@ -309,9 +328,9 @@ final class KeyVaultViewModel {
     func copyPublicKey(_ key: EncryptionKey) {
         let text: String
         switch key.type {
-        case .note:
-            // Notes have no public half. The secret itself is copied from the
-            // detail view, deliberately never from a list action.
+        case .note, .file:
+            // Notes and files have no public half. What they hold is copied or
+            // saved from the detail view, deliberately never from a list action.
             return
         case .ssh:
             text = key.publicKey ?? ""
@@ -388,6 +407,8 @@ final class KeyVaultViewModel {
             )
         case .api:
             try SecretStore.delete(id: key.id)
+        case .file:
+            try fileStore.delete(id: key.id)
         }
         await reload()
     }
@@ -480,12 +501,59 @@ final class KeyVaultViewModel {
         }
     }
 
-    /// Replace every stored-secret row in one go. Removing by a single type
-    /// and re-appending the whole store duplicated the other one — the store
-    /// owns more than API keys now, so the removal has to own the same set.
+    /// Store a file, and then — only once it has been stored and read back —
+    /// move the original to the Trash if asked to.
+    ///
+    /// Throws when the file could not be stored, so the sheet can say why and
+    /// stay open. The Trash is the one step that can fail after the file is
+    /// safely kept; that is reported rather than thrown, because the thing
+    /// that matters succeeded, and the user needs to hear that the original is
+    /// still sitting there unencrypted.
+    func addFile(from url: URL, name: String, notes: String?, trashOriginal: Bool) async throws {
+        // A symlink's target is the file. Trashing the link would leave the
+        // original where it was, while reporting that it had gone.
+        let original = url.resolvingSymlinksInPath()
+        let scoped = original.startAccessingSecurityScopedResource()
+        defer { if scoped { original.stopAccessingSecurityScopedResource() } }
+
+        let contents = try FileStore.contentsForStoring(original)
+        let key = EncryptionKey(
+            type: .file,
+            name: name,
+            notes: notes,
+            createdDate: Date(),
+            fileName: original.lastPathComponent,
+            fileSize: contents.count,
+            hasPrivateKey: false
+        )
+        try fileStore.save(key, contents: contents)
+        refreshStoredSecrets()
+
+        guard trashOriginal else { return }
+        do {
+            try FileManager.default.trashItem(at: original, resultingItemURL: nil)
+        } catch {
+            await appendError("\(original.lastPathComponent) is stored, but the original could "
+                              + "not be moved to the Trash: \(error.localizedDescription) It is "
+                              + "still on disk, unencrypted.")
+        }
+    }
+
+    /// Rename a stored file, or change its notes. The contents are untouched.
+    func updateFile(_ key: EncryptionKey, name: String, notes: String?) throws {
+        var edited = key
+        edited.name = name
+        edited.notes = notes
+        try fileStore.update(edited)
+        refreshStoredSecrets()
+    }
+
+    /// Replace every stored row in one go. Removing by a single type and
+    /// re-appending the whole store duplicated the others — the app stores
+    /// more than API keys now, so the removal has to own the same set.
     private func refreshStoredSecrets() {
-        allKeys.removeAll { SecretStore.ownedTypes.contains($0.type) }
-        allKeys.append(contentsOf: SecretStore.loadAll())
+        allKeys.removeAll { $0.type.isStored }
+        allKeys.append(contentsOf: SecretStore.loadAll() + fileStore.loadAll().files)
     }
 
     // MARK: - Backup
