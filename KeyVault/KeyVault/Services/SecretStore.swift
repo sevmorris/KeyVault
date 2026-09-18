@@ -201,15 +201,6 @@ enum SecretStore {
                           [kSecAttrAccess: access] as CFDictionary)
     }
 
-    /// Every category currently in use, sorted. Drives the pickers, so the set
-    /// grows from what is actually filed rather than from a hardcoded list.
-    static func knownCategories() -> [String] {
-        let used = loadAll(of: .note).compactMap { $0.category }
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-        return Array(Set(used)).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
-    }
-
     /// How many items are still stored as plaintext.
     static func plaintextCount() -> Int {
         allAccountIDs().reduce(into: 0) { count, id in

@@ -228,7 +228,7 @@ final class KeyVaultViewModel {
     /// Keychain update, and re-writing 24 items to change three is both slower
     /// and more chances to fail for no reason.
     func applyCategories(_ assignments: [UUID: String]) async {
-        var updated = 0, failed = 0
+        var failures: [String] = []
         for var note in allKeys where note.type == .note {
             let wanted = (assignments[note.id] ?? "").trimmingCharacters(in: .whitespaces)
             let current = (note.category ?? "").trimmingCharacters(in: .whitespaces)
@@ -238,16 +238,34 @@ final class KeyVaultViewModel {
                 // Metadata only — passing nil leaves the stored secret alone, so
                 // filing a note never risks the thing the note exists to hold.
                 try SecretStore.update(note, newSecret: nil)
-                updated += 1
             } catch {
-                failed += 1
-                await appendError("\(note.name): \(error.localizedDescription)")
+                failures.append("\(note.name): \(error.localizedDescription)")
             }
         }
-        if failed == 0 && updated > 0 {
-            await appendError("Filed \(updated) note(s).")
-        }
+        // Reported after the reload, not before it. reload() starts by
+        // clearing errorMessage, which is where a note that failed to file
+        // used to be reported — so the failure went unseen, the sheet closed
+        // as if it had all worked, and the note kept its old category.
         await reload()
+        forgetCollapsedCategoriesNotInUse()
+        if !failures.isEmpty {
+            await appendError("Could not file:\n" + failures.joined(separator: "\n"))
+        }
+    }
+
+    /// A category that no note is filed under any more — renamed or removed —
+    /// is dropped from the collapsed set, so that one made again later under
+    /// the same name does not come back already folded away.
+    private func forgetCollapsedCategoriesNotInUse() {
+        let inUse = Set(allKeys.compactMap { key -> String? in
+            guard key.type == .note, let c = key.category?.trimmingCharacters(in: .whitespaces),
+                  !c.isEmpty else { return nil }
+            return c
+        })
+        let kept = collapsedCategories.intersection(inUse)
+        guard kept != collapsedCategories else { return }
+        collapsedCategories = kept
+        UserDefaults.standard.set(collapsedCategories.sorted(), forKey: Self.collapsedCategoriesKey)
     }
 
     func keyCount(for type: KeyType) -> Int {
