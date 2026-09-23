@@ -84,13 +84,18 @@ enum VaultCrypto {
     /// Held only while unlocked. Never written anywhere: the whole point is that
     /// the disk holds ciphertext and a salt, and nothing that decrypts them.
     /// Read and written only inside `withSession`.
-    private static var sessionKey: SymmetricKey?
+    ///
+    /// `nonisolated(unsafe)` because the compiler cannot see a lock: to Swift 6
+    /// this is unprotected global state, and it is `sessionLock` that makes it
+    /// otherwise. Any access outside `withSession` is a data race.
+    nonisolated(unsafe) private static var sessionKey: SymmetricKey?
 
     /// Set aside by `suspend()`, and the only thing that makes a Touch ID
     /// resume possible. It is still just memory — nothing here is ever written
     /// down, which is why this can only bring back a vault that was open in
-    /// this same run of the app. Read and written only inside `withSession`.
-    private static var suspendedKey: SymmetricKey?
+    /// this same run of the app. Read and written only inside `withSession`,
+    /// and `nonisolated(unsafe)` for the same reason as `sessionKey`.
+    nonisolated(unsafe) private static var suspendedKey: SymmetricKey?
 
     private static func withSession<T>(_ body: () throws -> T) rethrows -> T {
         sessionLock.lock()

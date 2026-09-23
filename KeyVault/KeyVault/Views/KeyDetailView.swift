@@ -396,7 +396,11 @@ struct KeyDetailView: View {
 
     private func flashCopied() {
         copied = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+        // A task rather than DispatchQueue.main.asyncAfter, as copySecret
+        // does: that closure is @Sendable, and in Swift 6 cannot touch the
+        // view's state; a task started here stays on the main actor.
+        Task {
+            try? await Task.sleep(for: .seconds(1.5))
             copied = false
         }
     }

@@ -20,8 +20,13 @@ final class IdleWatcher {
     /// nothing on a Mac that is idle by definition when it matters.
     private static let tick: TimeInterval = 15
 
-    private var monitor: Any?
-    private var timer: Timer?
+    /// `nonisolated(unsafe)` so `deinit` can tear them down. A deinit is never
+    /// isolated, even on a main-actor class, and neither the monitor token nor
+    /// a Timer is Sendable, so Swift 6 refuses to let one read them otherwise.
+    /// Safe because they are written only by `start()` on the main actor, and
+    /// a deinit runs once nothing else holds the watcher.
+    nonisolated(unsafe) private var monitor: Any?
+    nonisolated(unsafe) private var timer: Timer?
     private var lastActivity = Date()
 
     func start() {

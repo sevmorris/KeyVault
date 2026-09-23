@@ -128,19 +128,27 @@ struct VaultLockView: View {
         failure = nil
         // Off the main thread: PBKDF2 at 600k iterations is deliberately slow,
         // and beachballing the window while it runs looks like a hang.
+        //
+        // Only the passphrase and the mode go to the detached task, and only
+        // the outcome comes back. The view itself — its state and the
+        // callbacks it was handed — belongs to the main actor and stays
+        // there, which is where `finish` then runs.
         let entered = passphrase
-        Task.detached {
-            do {
-                if mode == .setup {
-                    try VaultCrypto.configure(passphrase: entered)
-                    await finish(ok: true)
-                } else {
+        let mode = mode
+        Task {
+            let outcome = await Task.detached { () -> (ok: Bool, message: String?) in
+                do {
+                    if mode == .setup {
+                        try VaultCrypto.configure(passphrase: entered)
+                        return (true, nil)
+                    }
                     let ok = try VaultCrypto.unlock(passphrase: entered)
-                    await finish(ok: ok, message: ok ? nil : "That passphrase is not correct.")
+                    return (ok, ok ? nil : "That passphrase is not correct.")
+                } catch {
+                    return (false, error.localizedDescription)
                 }
-            } catch {
-                await finish(ok: false, message: error.localizedDescription)
-            }
+            }.value
+            finish(ok: outcome.ok, message: outcome.message)
         }
     }
 
