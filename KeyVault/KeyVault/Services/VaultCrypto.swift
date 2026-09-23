@@ -69,28 +69,49 @@ enum VaultCrypto {
 
     // MARK: - Session
 
+    /// Guards `sessionKey` and `suspendedKey`, which more than one thread
+    /// touches: the passphrase is derived and adopted on a detached task so
+    /// the window keeps drawing, the export reads the key on its own actor,
+    /// and the main thread locks, suspends and resumes. On a Mac with ten or
+    /// more cores those run at the same moment, and an unguarded Optional
+    /// holding a reference can be read while another thread releases it.
+    ///
+    /// Held for the read or the swap and nothing longer — never across a
+    /// derivation or a seal — and never taken twice: NSLock is not recursive,
+    /// so nothing called inside `withSession` may call it again.
+    private static let sessionLock = NSLock()
+
     /// Held only while unlocked. Never written anywhere: the whole point is that
     /// the disk holds ciphertext and a salt, and nothing that decrypts them.
+    /// Read and written only inside `withSession`.
     private static var sessionKey: SymmetricKey?
 
     /// Set aside by `suspend()`, and the only thing that makes a Touch ID
     /// resume possible. It is still just memory — nothing here is ever written
     /// down, which is why this can only bring back a vault that was open in
-    /// this same run of the app.
+    /// this same run of the app. Read and written only inside `withSession`.
     private static var suspendedKey: SymmetricKey?
 
-    static var isUnlocked: Bool { sessionKey != nil }
+    private static func withSession<T>(_ body: () throws -> T) rethrows -> T {
+        sessionLock.lock()
+        defer { sessionLock.unlock() }
+        return try body()
+    }
+
+    static var isUnlocked: Bool { withSession { sessionKey != nil } }
 
     /// True when the vault was closed by the idle timer rather than forgotten.
-    static var isSuspended: Bool { suspendedKey != nil }
+    static var isSuspended: Bool { withSession { suspendedKey != nil } }
 
     /// True once a passphrase has been set — i.e. a salt and verifier exist.
     static var isConfigured: Bool { loadBlob(account: saltAccount) != nil }
 
     /// A real lock: the key is gone, and only the passphrase derives it again.
     static func lock() {
-        sessionKey = nil
-        suspendedKey = nil
+        withSession {
+            sessionKey = nil
+            suspendedKey = nil
+        }
     }
 
     /// The one place a key becomes the session key, so "at most one copy of it
@@ -99,8 +120,17 @@ enum VaultCrypto {
     /// key in memory for the life of the process, and leave the vault
     /// describing itself as resumable when it had already been reopened.
     private static func adopt(_ key: SymmetricKey) {
-        sessionKey = key
-        suspendedKey = nil
+        withSession {
+            sessionKey = key
+            suspendedKey = nil
+        }
+    }
+
+    /// The key to seal or open with. Taken under the lock and used outside
+    /// it, so a large file's encryption never holds up a lock or an unlock.
+    private static func currentKey() throws -> SymmetricKey {
+        guard let key = withSession({ sessionKey }) else { throw CryptoError.locked }
+        return key
     }
 
     /// The idle lock. Deliberately weaker than `lock()` — it hides the vault
@@ -113,18 +143,28 @@ enum VaultCrypto {
     /// exactly what this file exists to avoid. Within one run there is already
     /// a key in memory, so nothing new is written anywhere.
     static func suspend() {
-        guard let key = sessionKey else { return }
-        suspendedKey = key
-        sessionKey = nil
+        withSession {
+            guard let key = sessionKey else { return }
+            suspendedKey = key
+            sessionKey = nil
+        }
     }
 
     /// Put a suspended key back. Authenticating is the caller's job; this only
     /// moves the key, and does nothing at all if the vault was properly locked.
+    ///
+    /// Inline rather than through `adopt`, which takes the lock itself and
+    /// would deadlock here. The check and the move have to be one step
+    /// anyway: split, a passphrase unlock landing between them would be
+    /// undone by the key it had just replaced.
     @discardableResult
     static func resume() -> Bool {
-        guard let key = suspendedKey else { return false }
-        adopt(key)
-        return true
+        withSession {
+            guard let key = suspendedKey else { return false }
+            sessionKey = key
+            suspendedKey = nil
+            return true
+        }
     }
 
     // MARK: - Passphrase
@@ -169,7 +209,7 @@ enum VaultCrypto {
     // MARK: - Encrypt / decrypt
 
     static func encrypt(_ plaintext: String) throws -> Data {
-        guard let key = sessionKey else { throw CryptoError.locked }
+        let key = try currentKey()
         let sealed = try AES.GCM.seal(Data(plaintext.utf8), using: key)
         guard let combined = sealed.combined else { throw CryptoError.malformed }
         return magic + combined
@@ -177,7 +217,7 @@ enum VaultCrypto {
 
     static func decrypt(_ blob: Data) throws -> String {
         guard isEncrypted(blob) else { throw CryptoError.malformed }
-        guard let key = sessionKey else { throw CryptoError.locked }
+        let key = try currentKey()
         let body = blob.dropFirst(magic.count)
         guard let box = try? AES.GCM.SealedBox(combined: body),
               let opened = try? AES.GCM.open(box, using: key),
@@ -201,14 +241,14 @@ enum VaultCrypto {
     /// the item's id, which is what stops one file's contents being moved into
     /// another file and opening there as if they belonged.
     static func seal(_ plaintext: Data, authenticating context: Data) throws -> Data {
-        guard let key = sessionKey else { throw CryptoError.locked }
+        let key = try currentKey()
         let sealed = try AES.GCM.seal(plaintext, using: key, authenticating: context)
         guard let combined = sealed.combined else { throw CryptoError.malformed }
         return combined
     }
 
     static func open(_ combined: Data, authenticating context: Data) throws -> Data {
-        guard let key = sessionKey else { throw CryptoError.locked }
+        let key = try currentKey()
         guard let box = try? AES.GCM.SealedBox(combined: combined),
               let opened = try? AES.GCM.open(box, using: key, authenticating: context) else {
             throw CryptoError.authenticationFailed
