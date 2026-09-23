@@ -40,6 +40,11 @@ final class IdleWatcher {
         timer = Timer.scheduledTimer(withTimeInterval: Self.tick, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.check() }
         }
+        // Slack for macOS to fire this alongside other wakeups rather than
+        // wake the CPU for it alone. The default is none; Apple's guidance is
+        // at least a tenth of the interval. A lock measured in minutes cannot
+        // tell three seconds late from on time.
+        timer?.tolerance = Self.tick / 5
     }
 
     /// Restart the countdown — after an unlock, so a vault just opened is not
