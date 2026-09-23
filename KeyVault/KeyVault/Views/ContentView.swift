@@ -109,6 +109,13 @@ struct ContentView: View {
         // .toolbar is confined to that column's slice of the toolbar, so the
         // sidebar's ~220pt gave Backup and Settings nowhere to render and they
         // collapsed into the overflow chevron regardless of window width.
+        //
+        // Three groups, split the way the sidebar is: the secrets KeyVault
+        // stores, the keys it indexes, and the vault as a whole. macOS 26
+        // draws a run of toolbar buttons as one glass capsule, and all eight
+        // in one read as a single undifferentiated strip; a fixed spacer
+        // between groups gives each its own. Earlier systems draw no capsule,
+        // so there is nothing to split and the spacer is left out.
         .toolbar {
             ToolbarItemGroup {
                 Button { viewModel.showAddNoteSheet = true } label: {
@@ -125,7 +132,16 @@ struct ContentView: View {
                     Label("Add File", systemImage: "arrow.down.doc")
                 }
                 .help("Add File")
+            }
 
+            if #available(macOS 26, *) {
+                ToolbarSpacer(.fixed)
+            }
+
+            // Refresh sits with the keys because they are what it re-reads:
+            // ~/.ssh, the GPG keyring and the Age files change underneath
+            // KeyVault, and the stored secrets do not.
+            ToolbarItemGroup {
                 Button { viewModel.showImportSheet = true } label: {
                     Label("Import Key", systemImage: "square.and.arrow.down")
                 }
@@ -140,7 +156,13 @@ struct ContentView: View {
                     Label("Refresh", systemImage: "arrow.clockwise")
                 }
                 .help("Refresh")
+            }
 
+            if #available(macOS 26, *) {
+                ToolbarSpacer(.fixed)
+            }
+
+            ToolbarItemGroup {
                 Button { viewModel.showBackupSheet = true } label: {
                     Label("Backup & Restore", systemImage: "arrow.up.doc.on.clipboard")
                 }
