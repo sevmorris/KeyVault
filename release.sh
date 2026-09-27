@@ -4,7 +4,8 @@
 # Usage: ./release.sh <version> [--generated-notes]
 #   e.g. ./release.sh 1.0
 #
-# Requires: xcodebuild, hdiutil, gh (GitHub CLI), git
+# Requires: xcodebuild, hdiutil, gh (GitHub CLI), git, codesign, xcrun, and
+#   python3 with dmgbuild; preflight checks each.
 
 set -euo pipefail
 
@@ -46,7 +47,6 @@ PROJECT="$PROJECT_DIR/KeyVault/KeyVault.xcodeproj"
 SCHEME="KeyVault"
 DERIVED_DATA="/tmp/keyvault_build_${VERSION}"
 APP_PATH="$DERIVED_DATA/Build/Products/Release/KeyVault.app"
-STAGING="/tmp/keyvault_dmg_${VERSION}"
 DMG="/tmp/KeyVault-${TAG}.dmg"
 APP_ZIP="/tmp/KeyVault-${TAG}-app.zip"
 MOUNT="/tmp/keyvault_verify_${VERSION}"
@@ -87,7 +87,6 @@ cleanup() {
         git -C "${PROJECT_DIR:-.}" checkout -- \
             "${README_MD:-}" "${MANUAL_IDX:-}" 2>/dev/null || true
     fi
-    [[ -d "${STAGING:-}" ]]      && rm -rf -- "$STAGING"      || true
     [[ -d "${MOUNT:-}" ]]        && rm -rf -- "$MOUNT"        || true
     [[ -d "${DERIVED_DATA:-}" ]] && rm -rf -- "$DERIVED_DATA" || true
     [[ -f "${DMG:-}" ]]          && rm -f  -- "$DMG"          || true
@@ -113,7 +112,7 @@ python3 -c "import dmgbuild" 2>/dev/null \
 python3 -c "import subprocess; subprocess.run(['/usr/bin/true'], check=True)" &>/dev/null \
     || fail "$(command -v python3) cannot start a subprocess, so dmgbuild would crash — rebuild that Python against an SDK no newer than this macOS"
 
-for cmd in xcodebuild hdiutil gh git python3; do
+for cmd in xcodebuild hdiutil gh git codesign xcrun python3; do
     command -v $cmd &>/dev/null || fail "'$cmd' not found in PATH"
 done
 ok "Tools present"
@@ -514,7 +513,7 @@ fi
 
 # ── Clean up temp files ───────────────────────────────────────────────────────
 step "Cleaning up"
-rm -rf "$STAGING" "$MOUNT" "$DERIVED_DATA"
+rm -rf "$MOUNT" "$DERIVED_DATA"
 rm -f "$DMG"
 ok "Temp files removed"
 
