@@ -1,7 +1,7 @@
 #!/usr/bin/env zsh
 # release.sh — Build, verify, package, and publish a KeyVault release.
 #
-# Usage: ./release.sh <version> [--generated-notes]
+# Usage: ./release.sh <version> [--generated-notes] [--skip-tests]
 #   e.g. ./release.sh 1.0
 #
 # Requires: xcodebuild, hdiutil, gh (GitHub CLI), git, codesign, xcrun, and
@@ -22,20 +22,24 @@ NOTARY_PROFILE="${NOTARY_PROFILE:-notarytool}"
 # Anything else — including no arguments, or a second positional that isn't a
 # flag — still fails with usage, as it did before the flags existed.
 ALLOW_GENERATED_NOTES=0
+SKIP_TESTS=0
 ARGS=()
 for arg in "$@"; do
     case "$arg" in
         --generated-notes) ALLOW_GENERATED_NOTES=1 ;;
+        --skip-tests)      SKIP_TESTS=1 ;;
         *)                 ARGS+=("$arg") ;;
     esac
 done
 
 if [[ ${#ARGS[@]} -ne 1 ]]; then
-    echo "Usage: $0 <version> [--generated-notes]"
+    echo "Usage: $0 <version> [--generated-notes] [--skip-tests]"
     echo "  e.g. $0 1.0"
     echo ""
     echo "  --generated-notes  Release without a curated release-notes file,"
     echo "                     generating notes from commit subjects instead."
+    echo "  --skip-tests       Skip the test suite (not recommended; use only when"
+    echo "                     tests are known-broken and you need an emergency release)."
     exit 1
 fi
 
@@ -54,6 +58,7 @@ PBXPROJ="$PROJECT/project.pbxproj"
 README_MD="$PROJECT_DIR/README.md"
 MANUAL_IDX="$PROJECT_DIR/docs/manual/index.html"
 NOTES_FILE="$PROJECT_DIR/release-notes/${TAG}.md"
+TEST_LOG="/tmp/keyvault_test_${VERSION}.log"
 
 # Set while project.pbxproj carries an uncommitted version bump, and cleared
 # once that rewrite is committed. The EXIT trap reverts it in between.
@@ -91,6 +96,7 @@ cleanup() {
     [[ -d "${DERIVED_DATA:-}" ]] && rm -rf -- "$DERIVED_DATA" || true
     [[ -f "${DMG:-}" ]]          && rm -f  -- "$DMG"          || true
     [[ -f "${APP_ZIP:-}" ]]      && rm -f  -- "$APP_ZIP"      || true
+    [[ -f "${TEST_LOG:-}" ]]     && rm -f  -- "$TEST_LOG"     || true
 }
 # A zsh EXIT trap does not fire on a signal, so Ctrl-C or a closed terminal
 # during the long notarization wait used to leave the version bump sitting in
@@ -257,6 +263,28 @@ elif (( ALLOW_GENERATED_NOTES )); then
 else
     echo "      expected:  release-notes/${TAG}.md" >&2
     fail "No curated notes for $TAG — write that file, or re-run with --generated-notes"
+fi
+
+# ── Tests ─────────────────────────────────────────────────────────────────────
+# KeyVaultTests, added on 2026-10-04: CI runs them, but nothing here checks
+# that it is green, and CI never runs the Xcode on this Mac, the one that
+# builds the release. FilmStrip's step, with its escape hatch.
+#
+# Before the version bump, like every gate above: a failure here leaves nothing
+# committed and nothing to undo.
+step "Running unit tests"
+if (( SKIP_TESTS )); then
+    warn "Skipping tests (--skip-tests)"
+else
+    if ! xcodebuild test \
+        -project "$PROJECT" \
+        -scheme "$SCHEME" \
+        -destination 'platform=macOS,arch=arm64' \
+        -quiet > "$TEST_LOG" 2>&1; then
+        cat "$TEST_LOG" >&2
+        fail "Tests failed — fix before releasing, or pass --skip-tests for an emergency release"
+    fi
+    ok "Tests passed"
 fi
 
 # ── Version bump ──────────────────────────────────────────────────────────────
