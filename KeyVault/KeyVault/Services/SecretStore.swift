@@ -333,10 +333,10 @@ enum SecretStore {
     /// the plist stops being load-bearing. Runs once, and is safe to re-run:
     /// it only ever adds attributes to items that already exist.
     static func migrateLegacyMetadataIfNeeded() {
-        guard !UserDefaults.standard.bool(forKey: migrationDoneKey) else { return }
+        guard !UserDefaults.app.bool(forKey: migrationDoneKey) else { return }
         let legacy = loadLegacyMetaDict()
         guard !legacy.isEmpty else {
-            UserDefaults.standard.set(true, forKey: migrationDoneKey)
+            UserDefaults.app.set(true, forKey: migrationDoneKey)
             return
         }
 
@@ -355,7 +355,7 @@ enum SecretStore {
             // has nothing to update, and must not block the rest.
             _ = try? update(key, newSecret: nil)
         }
-        UserDefaults.standard.set(true, forKey: migrationDoneKey)
+        UserDefaults.app.set(true, forKey: migrationDoneKey)
     }
 
     // MARK: - Helpers
@@ -396,7 +396,7 @@ enum SecretStore {
     }
 
     private static func loadLegacyMetaDict() -> [String: LegacyMeta] {
-        guard let data = UserDefaults.standard.data(forKey: legacyMetaDefaultsKey),
+        guard let data = UserDefaults.app.data(forKey: legacyMetaDefaultsKey),
               let dict = try? JSONDecoder().decode([String: LegacyMeta].self, from: data) else {
             return [:]
         }
@@ -405,6 +405,6 @@ enum SecretStore {
 
     private static func saveLegacyMetaDict(_ dict: [String: LegacyMeta]) {
         guard let data = try? JSONEncoder().encode(dict) else { return }
-        UserDefaults.standard.set(data, forKey: legacyMetaDefaultsKey)
+        UserDefaults.app.set(data, forKey: legacyMetaDefaultsKey)
     }
 }

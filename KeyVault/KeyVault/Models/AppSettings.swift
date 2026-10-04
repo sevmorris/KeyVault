@@ -29,7 +29,7 @@ struct AppSettings: Codable {
     }
 
     static func load() -> AppSettings {
-        guard let data = UserDefaults.standard.data(forKey: "AppSettings"),
+        guard let data = UserDefaults.app.data(forKey: "AppSettings"),
               let settings = try? JSONDecoder().decode(AppSettings.self, from: data) else {
             return AppSettings()
         }
@@ -38,6 +38,6 @@ struct AppSettings: Codable {
 
     func save() {
         guard let data = try? JSONEncoder().encode(self) else { return }
-        UserDefaults.standard.set(data, forKey: "AppSettings")
+        UserDefaults.app.set(data, forKey: "AppSettings")
     }
 }
