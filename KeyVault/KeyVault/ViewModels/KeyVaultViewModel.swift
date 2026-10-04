@@ -142,7 +142,7 @@ final class KeyVaultViewModel {
     init() {
         self.settings = AppSettings.load()
         self.collapsedCategories = Set(
-            UserDefaults.standard.stringArray(forKey: Self.collapsedCategoriesKey) ?? []
+            UserDefaults.app.stringArray(forKey: Self.collapsedCategoriesKey) ?? []
         )
         // Asked for once, at launch, rather than presented by a binding that
         // re-raises it the instant it is dismissed.
@@ -216,7 +216,7 @@ final class KeyVaultViewModel {
         }
         // Survives a relaunch. Sorted so the stored array does not churn on
         // every toggle just because a Set has no order.
-        UserDefaults.standard.set(collapsedCategories.sorted(),
+        UserDefaults.app.set(collapsedCategories.sorted(),
                                   forKey: Self.collapsedCategoriesKey)
     }
 
@@ -290,7 +290,7 @@ final class KeyVaultViewModel {
         let kept = collapsedCategories.intersection(inUse)
         guard kept != collapsedCategories else { return }
         collapsedCategories = kept
-        UserDefaults.standard.set(collapsedCategories.sorted(), forKey: Self.collapsedCategoriesKey)
+        UserDefaults.app.set(collapsedCategories.sorted(), forKey: Self.collapsedCategoriesKey)
     }
 
     func keyCount(for type: KeyType) -> Int {
