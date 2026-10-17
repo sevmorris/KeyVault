@@ -13,7 +13,13 @@ struct KeyListView: View {
                 ProgressView("Loading keys…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if viewModel.filteredKeys.isEmpty {
-                EmptyStateView(type: viewModel.selectedType)
+                // "No Notes" would be untrue of a vault full of them, so a
+                // search that matched nothing says so instead.
+                if viewModel.searchText.trimmingCharacters(in: .whitespaces).isEmpty {
+                    EmptyStateView(type: viewModel.selectedType)
+                } else {
+                    ContentUnavailableView.search(text: viewModel.searchText)
+                }
             } else {
                 List(selection: $viewModel.selectedKeyID) {
                     // Notes group under their category; everything else stays a

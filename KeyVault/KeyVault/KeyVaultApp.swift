@@ -106,6 +106,17 @@ struct KeyVaultApp: App {
                     .disabled(viewModel.vaultIsLocked)
             }
 
+            // In the Edit menu, where Find lives in every Mac app. SwiftUI
+            // gives this one no Find of its own (checked against the menu a
+            // hosted test run builds), so ⌘F is free; added after the group
+            // rather than replacing it, so anything the system puts there
+            // stays.
+            CommandGroup(after: .textEditing) {
+                Button("Find") { viewModel.searchFocusRequest += 1 }
+                    .keyboardShortcut("f", modifiers: .command)
+                    .disabled(viewModel.vaultIsLocked)
+            }
+
             // The standard home for this on macOS is the app menu at ⌘,.
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") {

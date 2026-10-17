@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @Bindable var viewModel: KeyVaultViewModel
+    @FocusState private var isSearchFocused: Bool
 
     var body: some View {
         Group {
@@ -105,6 +106,11 @@ struct ContentView: View {
                 EmptyStateView(type: viewModel.selectedType)
             }
         }
+        // In the toolbar, for the same reason as the buttons below: attached
+        // to a column, it would be squeezed into that column's slice.
+        .searchable(text: $viewModel.searchText, placement: .toolbar, prompt: "Search")
+        .searchFocused($isSearchFocused)
+        .onChange(of: viewModel.searchFocusRequest) { isSearchFocused = true }
         // Attached to the NavigationSplitView, not to a column. A column's
         // .toolbar is confined to that column's slice of the toolbar, so the
         // sidebar's ~220pt gave Backup and Settings nowhere to render and they

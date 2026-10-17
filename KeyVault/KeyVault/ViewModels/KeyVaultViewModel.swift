@@ -10,6 +10,14 @@ final class KeyVaultViewModel {
     /// app is for, and a flat list of all five buried them.
     var selectedType: KeyType? = .note
     var selectedKeyID: UUID? = nil
+    /// What the toolbar's search field holds. It narrows the list within the
+    /// sidebar's selection rather than searching every type at once, so the
+    /// list keeps the shape — notes under their categories — it had before
+    /// you typed.
+    var searchText = ""
+    /// Bumped by Find (⌘F) to put the cursor in the search field. A counter
+    /// rather than a flag, so asking twice is still a change to observe.
+    var searchFocusRequest = 0
     var isLoading = false
     var showGenerateSheet = false
     var showImportSheet = false
@@ -113,6 +121,8 @@ final class KeyVaultViewModel {
     private func clearLoadedSecrets() {
         allKeys.removeAll { $0.type.isStored }
         selectedKeyID = nil
+        // What was typed is a fair guess at what is in the vault.
+        searchText = ""
     }
 
     /// Whether the locked screen should offer a fingerprint. Both halves
@@ -169,8 +179,19 @@ final class KeyVaultViewModel {
     }
 
     var filteredKeys: [EncryptionKey] {
-        guard let type = selectedType else { return allKeys }
-        return allKeys.filter { $0.type == type }
+        let ofType = selectedType.map { type in allKeys.filter { $0.type == type } } ?? allKeys
+        return ofType.filter { Self.key($0, matches: searchText) }
+    }
+
+    /// Whether a key matches a search: its name, service, category or notes
+    /// contain the query, compared the way Finder compares — ignoring case and
+    /// diacritics. Only what is already on screen in the clear is searched,
+    /// never a secret, which would mean decrypting every item per keystroke.
+    nonisolated static func key(_ key: EncryptionKey, matches query: String) -> Bool {
+        let query = query.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return true }
+        return [key.name, key.service, key.category, key.notes]
+            .contains { $0?.localizedStandardContains(query) == true }
     }
 
     var selectedKey: EncryptionKey? {
