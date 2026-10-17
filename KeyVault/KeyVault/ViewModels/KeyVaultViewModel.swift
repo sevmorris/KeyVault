@@ -636,7 +636,8 @@ final class KeyVaultViewModel {
         await reload()
     }
 
-    func saveSettings() {
+    func saveSettings(_ newSettings: AppSettings) {
+        settings = newSettings
         settings.save()
     }
 }
