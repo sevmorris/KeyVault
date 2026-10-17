@@ -31,7 +31,17 @@ enum VaultCrypto {
     /// holds plain UTF-8, and must keep reading correctly until it is migrated,
     /// so the two have to be distinguishable with certainty rather than by
     /// guessing whether some bytes look like text.
-    static let magic = Data("KVENC1\0".utf8)
+    ///
+    /// Version 2 seals the item's id in as authenticated data, so a payload
+    /// opens only under the Keychain item it was written to. Version 1 did
+    /// not: anything that could write to the login keychain — every process
+    /// running as you, since the ciphertext's ACL is open — could copy one
+    /// item's payload over another's, and the vault would show the copied
+    /// secret under the other name without complaint. Version 1 is still read,
+    /// and becomes version 2 when its secret is next saved, or when Settings'
+    /// Repair Keychain Access sweeps the vault.
+    static let magicV1 = Data("KVENC1\0".utf8)
+    static let magicV2 = Data("KVENC2\0".utf8)
 
     /// OWASP's floor for PBKDF2-HMAC-SHA256. Deliberately slow: it is the only
     /// thing standing between a stolen ciphertext and an offline guessing run.
@@ -232,34 +242,55 @@ enum VaultCrypto {
     // test exercises the real format without a passphrase in the Keychain,
     // and it is the same code, not a copy of it.
 
-    static func encrypt(_ plaintext: String) throws -> Data {
-        try encrypt(plaintext, using: currentKey())
+    /// Seal a secret for the item `id`. Always version 2.
+    static func encrypt(_ plaintext: String, for id: UUID) throws -> Data {
+        try encrypt(plaintext, for: id, using: currentKey())
     }
 
-    static func encrypt(_ plaintext: String, using key: SymmetricKey) throws -> Data {
-        let sealed = try AES.GCM.seal(Data(plaintext.utf8), using: key)
+    static func encrypt(_ plaintext: String, for id: UUID, using key: SymmetricKey) throws -> Data {
+        let sealed = try AES.GCM.seal(Data(plaintext.utf8), using: key,
+                                      authenticating: itemContext(id))
         guard let combined = sealed.combined else { throw CryptoError.malformed }
-        return magic + combined
+        return magicV2 + combined
     }
 
-    static func decrypt(_ blob: Data) throws -> String {
+    static func decrypt(_ blob: Data, for id: UUID) throws -> String {
         guard isEncrypted(blob) else { throw CryptoError.malformed }
-        return try decrypt(blob, using: currentKey())
+        return try decrypt(blob, for: id, using: currentKey())
     }
 
-    static func decrypt(_ blob: Data, using key: SymmetricKey) throws -> String {
-        guard isEncrypted(blob) else { throw CryptoError.malformed }
-        let body = blob.dropFirst(magic.count)
-        guard let box = try? AES.GCM.SealedBox(combined: body),
-              let opened = try? AES.GCM.open(box, using: key),
-              let text = String(data: opened, encoding: .utf8) else {
+    /// Either version. A version 2 payload under the wrong item fails the
+    /// same way as one under the wrong key: AES-GCM cannot tell them apart,
+    /// and the wrong key is by far the likelier.
+    static func decrypt(_ blob: Data, for id: UUID, using key: SymmetricKey) throws -> String {
+        let opened: Data?
+        if blob.starts(with: magicV2) {
+            let box = try? AES.GCM.SealedBox(combined: blob.dropFirst(magicV2.count))
+            opened = box.flatMap { try? AES.GCM.open($0, using: key, authenticating: itemContext(id)) }
+        } else if blob.starts(with: magicV1) {
+            let box = try? AES.GCM.SealedBox(combined: blob.dropFirst(magicV1.count))
+            opened = box.flatMap { try? AES.GCM.open($0, using: key) }
+        } else {
+            throw CryptoError.malformed
+        }
+        guard let opened, let text = String(data: opened, encoding: .utf8) else {
             throw CryptoError.wrongPassphrase
         }
         return text
     }
 
     static func isEncrypted(_ blob: Data) -> Bool {
-        blob.count > magic.count && blob.prefix(magic.count) == magic
+        [magicV1, magicV2].contains { blob.count > $0.count && blob.starts(with: $0) }
+    }
+
+    /// Whether a payload predates binding to its item.
+    static func isVersion1(_ blob: Data) -> Bool {
+        blob.count > magicV1.count && blob.starts(with: magicV1)
+    }
+
+    /// What a version 2 payload is sealed against: the format and the item.
+    private static func itemContext(_ id: UUID) -> Data {
+        magicV2 + id.bytes
     }
 
     // MARK: - Bytes
@@ -350,4 +381,10 @@ enum VaultCrypto {
         guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess else { return nil }
         return result as? Data
     }
+}
+
+extension UUID {
+    /// The sixteen bytes of the UUID, in order. What both stores bind
+    /// ciphertext to.
+    var bytes: Data { withUnsafeBytes(of: uuid) { Data($0) } }
 }

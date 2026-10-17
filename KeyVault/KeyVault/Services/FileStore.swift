@@ -332,8 +332,6 @@ struct FileStore {
 }
 
 private extension UUID {
-    var bytes: Data { withUnsafeBytes(of: uuid) { Data($0) } }
-
     init?(bytes: Data) {
         guard bytes.count == 16 else { return nil }
         self = bytes.withUnsafeBytes { UUID(uuid: $0.loadUnaligned(as: uuid_t.self)) }

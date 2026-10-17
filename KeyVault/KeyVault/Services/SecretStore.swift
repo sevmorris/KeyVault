@@ -117,7 +117,7 @@ enum SecretStore {
         }
 
         var query = baseQuery(id: key.id)
-        let payload = try protectedPayload(secretData)
+        let payload = try protectedPayload(secretData, for: key.id)
         query[kSecValueData] = payload
         query[kSecAttrAccessible] = kSecAttrAccessibleWhenUnlocked
         if let access = acl(forPayload: payload) { query[kSecAttrAccess] = access }
@@ -140,7 +140,7 @@ enum SecretStore {
             guard let data = newSecret.data(using: .utf8) else {
                 throw KeyError.keychainError(errSecParam)
             }
-            let payload = try protectedPayload(data)
+            let payload = try protectedPayload(data, for: key.id)
             changes[kSecValueData] = payload
             // Editing an item written before the passphrase was set encrypts
             // it on the way back down, so the vault protects itself as you
@@ -191,12 +191,13 @@ enum SecretStore {
                 // a previous build stamped on it. Relaxing costs one update and
                 // saves a dialog per item on every future export.
                 relaxAccess(for: id)
+                if VaultCrypto.isVersion1(blob) { upgradeToVersion2(id: id, payload: blob) }
                 alreadyDone += 1
                 continue
             }
 
             guard let plaintext = String(data: blob, encoding: .utf8),
-                  let sealed = try? VaultCrypto.encrypt(plaintext) else {
+                  let sealed = try? VaultCrypto.encrypt(plaintext, for: id) else {
                 failed += 1
                 continue
             }
@@ -209,8 +210,11 @@ enum SecretStore {
                                        changes as CFDictionary)
             if status == errSecSuccess {
                 // Read back before counting it: this file has already shipped a
-                // sweep that trusted errSecSuccess and protected nothing.
-                if let check = rawPayload(for: id), VaultCrypto.isEncrypted(check) {
+                // sweep that trusted errSecSuccess and protected nothing. And
+                // opened, not just recognised: ciphertext that does not give
+                // back the secret is a secret lost.
+                if let check = rawPayload(for: id),
+                   (try? VaultCrypto.decrypt(check, for: id)) == plaintext {
                     encrypted += 1
                 } else {
                     failed += 1
@@ -220,6 +224,25 @@ enum SecretStore {
             }
         }
         return (encrypted, alreadyDone, failed)
+    }
+
+    /// Re-seal a version 1 payload as version 2, binding it to its item. See
+    /// `VaultCrypto.magicV2`.
+    ///
+    /// Best-effort, like `relaxAccess`: a version 1 payload is still sealed
+    /// under the passphrase, so one that will not upgrade is left as it is
+    /// rather than failing the sweep. Written only once it has opened, and
+    /// read back and opened again afterwards; if that fails, the payload it
+    /// replaced is put back.
+    private static func upgradeToVersion2(id: UUID, payload: Data) {
+        guard let plaintext = try? VaultCrypto.decrypt(payload, for: id),
+              let sealed = try? VaultCrypto.encrypt(plaintext, for: id),
+              SecItemUpdate(baseQuery(id: id) as CFDictionary,
+                            [kSecValueData: sealed] as CFDictionary) == errSecSuccess else { return }
+        if let check = rawPayload(for: id), (try? VaultCrypto.decrypt(check, for: id)) == plaintext {
+            return
+        }
+        _ = SecItemUpdate(baseQuery(id: id) as CFDictionary, [kSecValueData: payload] as CFDictionary)
     }
 
     /// Widen one item's ACL to any application. Best-effort: an item that
@@ -330,13 +353,13 @@ enum SecretStore {
     /// Encrypt when a passphrase is configured and the vault is open. Before
     /// that, storage is plaintext exactly as it always was — the app has to
     /// keep working for someone who has not set one yet.
-    private static func protectedPayload(_ plaintext: Data) throws -> Data {
+    private static func protectedPayload(_ plaintext: Data, for id: UUID) throws -> Data {
         guard VaultCrypto.isConfigured else { return plaintext }
         guard VaultCrypto.isUnlocked else { throw VaultCrypto.CryptoError.locked }
         guard let text = String(data: plaintext, encoding: .utf8) else {
             throw KeyError.keychainError(errSecParam)
         }
-        return try VaultCrypto.encrypt(text)
+        return try VaultCrypto.encrypt(text, for: id)
     }
 
     // MARK: - Read
@@ -349,7 +372,7 @@ enum SecretStore {
             throw KeyError.keychainError(errSecItemNotFound)
         }
         if VaultCrypto.isEncrypted(data) {
-            return try VaultCrypto.decrypt(data)
+            return try VaultCrypto.decrypt(data, for: id)
         }
         // Written before a passphrase was set. Still readable, and still
         // exposed — encryptExistingSecrets() is what fixes that.
