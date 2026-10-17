@@ -64,6 +64,11 @@ enum VaultCrypto {
         /// nobody typed one, and the vault it came from is open.
         case authenticationFailed
         case keychain(OSStatus)
+        /// The Keychain would not hand over the salt. Not `locked`, which a
+        /// passphrase fixes: no passphrase fixes this one.
+        case keychainUnavailable(OSStatus)
+        /// First-time setup asked of a vault that already has a passphrase.
+        case alreadyConfigured
 
         var errorDescription: String? {
             switch self {
@@ -76,6 +81,15 @@ enum VaultCrypto {
             case .keychain(let s):
                 let detail = SecCopyErrorMessageString(s, nil) as String?
                 return detail.map { "Keychain error: \($0)" } ?? "Keychain error (OSStatus \(s))"
+            // The system's own text is left out: for a locked keychain it is
+            // "The user name or passphrase you entered is not correct", which
+            // reads as if the master passphrase were wrong.
+            case .keychainUnavailable(let s):
+                return "KeyVault can't read your login keychain, so it can't open the vault. "
+                    + "Unlock the login keychain in Keychain Access, or log out and back in, "
+                    + "then try again. (Keychain error \(s))"
+            case .alreadyConfigured:
+                return "A master passphrase is already set. Use Change Passphrase to replace it."
             }
         }
     }
@@ -121,8 +135,40 @@ enum VaultCrypto {
     /// True when the vault was closed by the idle timer rather than forgotten.
     static var isSuspended: Bool { withSession { suspendedKey != nil } }
 
-    /// True once a passphrase has been set — i.e. a salt and verifier exist.
-    static var isConfigured: Bool { loadBlob(account: saltAccount) != nil }
+    /// Whether a passphrase has been set, as far as the Keychain will say.
+    enum Setup: Equatable {
+        case notSet
+        case set
+        /// The salt read failed for a reason other than its not being there:
+        /// a locked login keychain, a refused or cancelled prompt, securityd
+        /// restarting.
+        case unreadable(OSStatus)
+
+        var failure: OSStatus? {
+            if case .unreadable(let status) = self { status } else { nil }
+        }
+    }
+
+    static var setup: Setup {
+        let read = readBlob(account: saltAccount)
+        return classify(saltRead: read.status, data: read.data)
+    }
+
+    /// Only errSecItemNotFound means there is no vault. Taking any failed
+    /// read for one is the mistake here that loses data: the app then offers
+    /// first-time setup, whose new salt leaves every secret and file sealed
+    /// under the old one unreadable, and stores new notes as plain text.
+    static func classify(saltRead status: OSStatus, data: Data?) -> Setup {
+        switch status {
+        case errSecItemNotFound: return .notSet
+        case errSecSuccess: return data == nil ? .unreadable(errSecDecode) : .set
+        default: return .unreadable(status)
+        }
+    }
+
+    /// True once a passphrase has been set — i.e. a salt and verifier exist —
+    /// and also when the Keychain will not say. See `classify(saltRead:data:)`.
+    static var isConfigured: Bool { setup != .notSet }
 
     /// A real lock: the key is gone, and only the passphrase derives it again.
     static func lock() {
@@ -195,6 +241,15 @@ enum VaultCrypto {
     /// verifier so a later wrong passphrase is reported as such rather than
     /// producing garbage that looks like a corrupt vault.
     static func configure(passphrase: String) throws {
+        // Only where there is no vault at all. Over an existing one the new
+        // salt would make everything sealed under the old one unreadable, and
+        // a salt the Keychain would not hand over is not evidence of none.
+        switch setup {
+        case .notSet: break
+        case .set: throw CryptoError.alreadyConfigured
+        case .unreadable(let status): throw CryptoError.keychainUnavailable(status)
+        }
+
         var salt = Data(count: saltBytes)
         let ok = salt.withUnsafeMutableBytes { buf in
             SecRandomCopyBytes(kSecRandomDefault, saltBytes, buf.baseAddress!) == errSecSuccess
@@ -213,8 +268,13 @@ enum VaultCrypto {
     /// throwing for a wrong passphrase, which is an expected answer, not a fault.
     @discardableResult
     static func unlock(passphrase: String) throws -> Bool {
-        guard let salt = loadBlob(account: saltAccount),
-              let verifier = loadBlob(account: verifierAccount) else {
+        let saltRead = readBlob(account: saltAccount)
+        let verifierRead = readBlob(account: verifierAccount)
+        guard let salt = saltRead.data, let verifier = verifierRead.data else {
+            if let failure = classify(saltRead: saltRead.status, data: saltRead.data).failure
+                ?? classify(saltRead: verifierRead.status, data: verifierRead.data).failure {
+                throw CryptoError.keychainUnavailable(failure)
+            }
             throw CryptoError.locked
         }
         guard let key = try key(for: passphrase, salt: salt, verifier: verifier) else { return false }
@@ -466,6 +526,12 @@ enum VaultCrypto {
     }
 
     private static func loadBlob(account: String) -> Data? {
+        readBlob(account: account).data
+    }
+
+    /// The read with its status, for the callers that have to tell "not
+    /// there" from "would not say".
+    private static func readBlob(account: String) -> (data: Data?, status: OSStatus) {
         let query: [CFString: Any] = [
             kSecClass: kSecClassGenericPassword,
             kSecAttrService: SecretStore.keychainService,
@@ -475,8 +541,9 @@ enum VaultCrypto {
             kSecMatchLimit: kSecMatchLimitOne
         ]
         var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess else { return nil }
-        return result as? Data
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess else { return (nil, status) }
+        return (result as? Data, status)
     }
 }
 
