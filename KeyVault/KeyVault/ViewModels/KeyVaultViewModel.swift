@@ -19,6 +19,10 @@ final class KeyVaultViewModel {
     /// rather than a flag, so asking twice is still a change to observe.
     var searchFocusRequest = 0
     var isLoading = false
+    /// The indexed keys — SSH, GPG, Age — are still being read. Separate from
+    /// `isLoading` so the stored secrets, which need nothing but the Keychain
+    /// and the Files folder, are on screen while gpg takes its time.
+    var isLoadingIndexed = false
     var showGenerateSheet = false
     var showImportSheet = false
     var showAddAPIKeySheet = false
@@ -390,7 +394,14 @@ final class KeyVaultViewModel {
     /// which clears whatever was there before.
     @ObservationIgnored private var launchNotice: String?
 
+    /// Bumped by every reload, so one that is overtaken — Refresh pressed
+    /// while gpg is still answering the last — does not write its older
+    /// result over the newer one.
+    @ObservationIgnored private var reloadGeneration = 0
+
     func reload() async {
+        reloadGeneration += 1
+        let generation = reloadGeneration
         isLoading = true
         errorMessage = nil
 
@@ -421,9 +432,20 @@ final class KeyVaultViewModel {
             stored = SecretStore.loadAll() + (await loadFiles())
         }
 
-        let (ssh, gpg, age) = await (sshKeys, gpgKeys, ageKeys)
-        allKeys = ssh + gpg + age + stored
+        // Shown now, beside whatever keys the last reload found, rather than
+        // after gpg has answered: the secrets are what the app opens on, and
+        // a slow or wedged gpg-agent used to hold all of them back.
+        allKeys = allKeys.filter { !$0.type.isStored } + stored
         isLoading = false
+        isLoadingIndexed = true
+
+        let (ssh, gpg, age) = await (sshKeys, gpgKeys, ageKeys)
+        guard generation == reloadGeneration else { return }
+        // The stored half is taken from what is on screen now, not from
+        // `stored` above: the vault may have locked while gpg was answering,
+        // and putting the secrets back behind the locked screen would undo it.
+        allKeys = ssh + gpg + age + allKeys.filter { $0.type.isStored }
+        isLoadingIndexed = false
     }
 
     private func loadSSH() async -> [EncryptionKey] {

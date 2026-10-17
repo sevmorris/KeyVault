@@ -200,7 +200,10 @@ actor GPGService {
             // than gpg-agent trying to raise a pinentry against a tty a GUI
             // app does not have.
             arguments: ["--batch", "--pinentry-mode", "loopback", "--full-generate-key"],
-            stdinData: data
+            stdinData: data,
+            // A 4096-bit RSA pair waits on entropy, and can take minutes on a
+            // quiet machine; the default limit would kill a key mid-birth.
+            timeout: 300
         )
         guard result.status == 0 else {
             throw KeyError.keygenFailed(result.stderr.isEmpty ? result.stdout : result.stderr)

@@ -21,7 +21,11 @@ actor ShellService {
         private var out = Data()
         private var err = Data()
 
+        private var didTimeOut = false
+
         func appendOut(_ data: Data) { lock.lock(); out += data; lock.unlock() }
+        func markTimedOut() { lock.lock(); didTimeOut = true; lock.unlock() }
+        var timedOut: Bool { lock.lock(); defer { lock.unlock() }; return didTimeOut }
         func appendErr(_ data: Data) { lock.lock(); err += data; lock.unlock() }
 
         var strings: (stdout: String, stderr: String) {
@@ -42,31 +46,51 @@ actor ShellService {
         signal(SIGPIPE, SIG_IGN)
     }()
 
+    /// How long a tool may run before it is stopped. Every tool this app runs
+    /// answers in a second or two; the ones that do not are waiting for
+    /// something that will never come — gpg for a pinentry on a tty a GUI app
+    /// does not have, or for a gpg-agent that has wedged — and without a limit
+    /// the list stayed on "Loading keys…" for the life of the app, and a
+    /// backup simply never finished.
+    static let defaultTimeout: TimeInterval = 60
+
+    struct TimedOut: LocalizedError {
+        let tool: String
+        let seconds: TimeInterval
+        var errorDescription: String? {
+            "\((tool as NSString).lastPathComponent) did not finish within \(Int(seconds)) seconds "
+                + "and was stopped."
+        }
+    }
+
     /// `environment` is added to the app's own, not put in place of it: a
     /// child given only what the caller named would lose HOME and PATH.
     func run(
         _ executable: String,
         arguments: [String],
-        environment: [String: String] = [:]
+        environment: [String: String] = [:],
+        timeout: TimeInterval = defaultTimeout
     ) async throws -> (stdout: String, stderr: String, status: Int32) {
         try await execute(executable, arguments: arguments, stdinData: nil,
-                          environment: environment)
+                          environment: environment, timeout: timeout)
     }
 
     func runWithStdin(
         _ executable: String,
         arguments: [String],
-        stdinData: Data
+        stdinData: Data,
+        timeout: TimeInterval = defaultTimeout
     ) async throws -> (stdout: String, stderr: String, status: Int32) {
         try await execute(executable, arguments: arguments, stdinData: stdinData,
-                          environment: [:])
+                          environment: [:], timeout: timeout)
     }
 
     private func execute(
         _ executable: String,
         arguments: [String],
         stdinData: Data?,
-        environment: [String: String]
+        environment: [String: String],
+        timeout: TimeInterval
     ) async throws -> (stdout: String, stderr: String, status: Int32) {
         _ = Self.ignoreSIGPIPE
 
@@ -113,6 +137,15 @@ actor ShellService {
             // wrote is dropped just because it exited promptly after writing.
             process.terminationHandler = { proc in
                 let status = proc.terminationStatus
+                // A tool stopped for taking too long is not waited on for EOF.
+                // Something it started can still hold the pipes open — a shell
+                // killed outright leaves its own child behind — and waiting
+                // for that would be the hang the time limit is there to end.
+                // The readers finish on their own whenever the pipes close.
+                if output.timedOut {
+                    continuation.resume(throwing: TimedOut(tool: executable, seconds: timeout))
+                    return
+                }
                 group.notify(queue: io) {
                     let (out, err) = output.strings
                     continuation.resume(returning: (stdout: out, stderr: err, status: status))
@@ -121,6 +154,20 @@ actor ShellService {
 
             do {
                 try process.run()
+                // SIGTERM first, so gpg can tidy up after itself; SIGKILL if
+                // it is still there a few seconds later. Either way the child
+                // exits, its pipes close, and the termination handler above
+                // resumes with the timeout rather than hanging. A child that
+                // has already finished is not signalled: `isRunning` is false.
+                let pid = process.processIdentifier
+                io.asyncAfter(deadline: .now() + timeout) {
+                    guard process.isRunning else { return }
+                    output.markTimedOut()
+                    process.terminate()
+                    io.asyncAfter(deadline: .now() + 3) {
+                        if process.isRunning { kill(pid, SIGKILL) }
+                    }
+                }
                 if let stdinPipe, let stdinData {
                     group.enter()
                     io.async {

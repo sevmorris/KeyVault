@@ -9,7 +9,11 @@ struct KeyListView: View {
 
     var body: some View {
         Group {
-            if viewModel.isLoading {
+            // Still loading only if there is nothing to show yet: the secrets
+            // arrive before the keys, and are not hidden while gpg answers.
+            if viewModel.isLoading
+                || (viewModel.isLoadingIndexed && viewModel.filteredKeys.isEmpty
+                    && viewModel.selectedType?.isStored != true) {
                 ProgressView("Loading keys…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if viewModel.filteredKeys.isEmpty {
