@@ -67,9 +67,9 @@ struct ContentView: View {
             Button("Later", role: .cancel) { }
         } message: {
             Text("""
-                Secrets saved before now are still stored as plain text and \
-                readable by anything running as you. Back up first if you have \
-                not — this cannot be undone without your passphrase.
+                Secrets saved before now are still stored as plain text, \
+                guarded only by the Keychain's permission prompt. Back up first \
+                if you have not — this cannot be undone without your passphrase.
                 """)
         }
         .sheet(isPresented: $viewModel.showBulkCategorise) {

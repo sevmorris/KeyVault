@@ -304,9 +304,25 @@ final class KeyVaultViewModel {
         idleWatcher.reset()
     }
 
+    /// Whether this launch has closed the ACLs an earlier build opened on
+    /// plaintext items. Once a launch is enough: nothing this build writes
+    /// opens one.
+    @ObservationIgnored private var didRestrictPlaintextAccess = false
+
     func reload() async {
         isLoading = true
         errorMessage = nil
+
+        // Plaintext needs no vault key, so this runs locked or not.
+        if !didRestrictPlaintextAccess {
+            didRestrictPlaintextAccess = true
+            let result = SecretStore.restrictPlaintextAccess()
+            if result.failed > 0 {
+                await appendError("\(result.failed) secret(s) stored as plain text are still open to "
+                                  + "every app on this Mac, which can read them without asking. "
+                                  + "Encrypting them under a master passphrase, in Settings, fixes that.")
+            }
+        }
 
         async let sshKeys = loadSSH()
         async let gpgKeys = loadGPG()
