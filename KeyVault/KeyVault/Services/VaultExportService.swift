@@ -151,6 +151,12 @@ actor VaultExportService {
             )
         }
 
+        return try Self.decodeArchive(data)
+    }
+
+    /// The decrypted JSON, parsed and checked for a version this build can
+    /// read. Apart from `readArchive` so it can be tested without gpg.
+    static func decodeArchive(_ data: Data) throws -> VaultArchive {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let archive = try decoder.decode(VaultArchive.self, from: data)
@@ -174,10 +180,55 @@ actor VaultExportService {
     /// than none; a restore that silently declines to write one is the same
     /// bargain, and the user is equally entitled to hear about it.
     func restore(_ archive: VaultArchive) throws -> (added: Int, updated: Int, skipped: Int) {
-        // Every file is decoded, and the passphrase they need checked for,
-        // before anything is written — so a damaged file, or a vault that
-        // cannot hold one, stops the restore at the door rather than half way
-        // through it.
+        // Whole items by id, where a set of ids used to do: restoring an item
+        // has to know the category it is already filed under. A repeated id
+        // keeps the first rather than trapping, as `uniqueKeysWithValues`
+        // would — the set this replaced tolerated one too.
+        let existing = Dictionary(SecretStore.loadAll().map { ($0.id, $0) },
+                                  uniquingKeysWith: { first, _ in first })
+        let plan = try Self.plan(archive, existing: existing,
+                                 canStoreFiles: VaultCrypto.isConfigured,
+                                 fileExists: files.exists(id:))
+
+        for write in plan.writes {
+            switch write {
+            case .file(let key, let contents):
+                try files.save(key, contents: contents)
+            case .secret(let key, let secret, let isUpdate):
+                if isUpdate {
+                    try SecretStore.update(key, newSecret: secret)
+                } else {
+                    try SecretStore.save(key, secret: secret)
+                }
+            }
+        }
+        return (plan.added, plan.updated, plan.skipped)
+    }
+
+    /// What a restore will write, decided before anything is written.
+    struct RestorePlan {
+        enum Write {
+            case file(EncryptionKey, Data)
+            case secret(EncryptionKey, String, isUpdate: Bool)
+        }
+        var writes: [Write] = []
+        var added = 0
+        var updated = 0
+        var skipped = 0
+    }
+
+    /// Every rule a restore follows, and none of the storage. Kept apart from
+    /// `restore` so the rules can be tested without a Keychain: `existing` is
+    /// what the vault already holds, by id, and `fileExists` says which files
+    /// the file store has.
+    ///
+    /// Every file is decoded, and the passphrase they need checked for, before
+    /// anything is written — so a damaged file, or a vault that cannot hold
+    /// one, stops the restore at the door rather than half way through it.
+    static func plan(_ archive: VaultArchive,
+                     existing: [UUID: EncryptionKey],
+                     canStoreFiles: Bool,
+                     fileExists: (UUID) -> Bool) throws -> RestorePlan {
         var fileContents: [UUID: Data] = [:]
         for item in archive.items where item.type == KeyType.file.rawValue {
             // Whitespace is forgiven — the archive is meant to be editable by
@@ -189,7 +240,7 @@ actor VaultExportService {
             }
             fileContents[item.id] = contents
         }
-        if !fileContents.isEmpty && !VaultCrypto.isConfigured {
+        if !fileContents.isEmpty && !canStoreFiles {
             throw KeyError.importFailed(
                 "This archive holds \(fileContents.count) file(s), and KeyVault stores files only "
                 + "under a master passphrase. Set one in Settings, then restore again — nothing "
@@ -197,19 +248,10 @@ actor VaultExportService {
             )
         }
 
-        // Whole items by id, where a set of ids used to do: restoring an item
-        // has to know the category it is already filed under. A repeated id
-        // keeps the first rather than trapping, as `uniqueKeysWithValues`
-        // would — the set this replaced tolerated one too.
-        let existing = Dictionary(SecretStore.loadAll().map { ($0.id, $0) },
-                                  uniquingKeysWith: { first, _ in first })
-        var added = 0
-        var updated = 0
-        var skipped = 0
-
+        var plan = RestorePlan()
         for item in archive.items {
             guard let type = KeyType(rawValue: item.type), type.isStored else {
-                skipped += 1
+                plan.skipped += 1
                 continue
             }
             if type == .file {
@@ -223,9 +265,8 @@ actor VaultExportService {
                     fileName: item.fileName ?? item.name,
                     hasPrivateKey: false
                 )
-                let existed = files.exists(id: item.id)
-                try files.save(key, contents: contents)
-                if existed { updated += 1 } else { added += 1 }
+                plan.writes.append(.file(key, contents))
+                if fileExists(item.id) { plan.updated += 1 } else { plan.added += 1 }
                 continue
             }
             let key = EncryptionKey(
@@ -245,15 +286,11 @@ actor VaultExportService {
                 createdDate: item.createdDate,
                 hasPrivateKey: false
             )
-            if existing[item.id] != nil {
-                try SecretStore.update(key, newSecret: item.secret)
-                updated += 1
-            } else {
-                try SecretStore.save(key, secret: item.secret)
-                added += 1
-            }
+            let isUpdate = existing[item.id] != nil
+            plan.writes.append(.secret(key, item.secret, isUpdate: isUpdate))
+            if isUpdate { plan.updated += 1 } else { plan.added += 1 }
         }
-        return (added, updated, skipped)
+        return plan
     }
 
     // MARK: - Helpers

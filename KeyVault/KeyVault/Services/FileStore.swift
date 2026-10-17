@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Encrypted storage for whole files KeyVault holds outright — a password
@@ -42,6 +43,23 @@ struct FileStore {
     )
 
     let directory: URL
+
+    /// Where the key comes from. The app's store seals under the vault's
+    /// session key, and a store a test builds is handed one, so the format is
+    /// exercised end to end without a passphrase in the real Keychain.
+    enum Keying {
+        case vault
+        case fixed(SymmetricKey)
+    }
+
+    var keying: Keying = .vault
+
+    private func key() throws -> SymmetricKey {
+        switch keying {
+        case .vault: return try VaultCrypto.currentKey()
+        case .fixed(let key): return key
+        }
+    }
 
     /// Large enough for anything that belongs here — an export, a scan, a
     /// recovery kit — and small enough that the backup stays something you can
@@ -171,7 +189,12 @@ struct FileStore {
     /// read-back is the rule SecretStore's sweep learned the hard way: a write
     /// that reports success is not evidence that the thing is there.
     func save(_ key: EncryptionKey, contents: Data) throws {
-        guard VaultCrypto.isConfigured else { throw StoreError.needsPassphrase }
+        // Asked only of the vault's own key. `isConfigured` reads the salt
+        // from the real Keychain, which a store with a key of its own has no
+        // business touching.
+        if case .vault = keying {
+            guard VaultCrypto.isConfigured else { throw StoreError.needsPassphrase }
+        }
         guard contents.count <= Self.maxFileSize else { throw StoreError.tooLarge(contents.count) }
 
         let header = Header(
@@ -246,15 +269,17 @@ struct FileStore {
         let headerSize = try Self.checkPrefix(handle.read(upToCount: Self.prefixSize) ?? Data(), id: id)
         let sealed = try handle.read(upToCount: headerSize) ?? Data()
         guard sealed.count == headerSize else { throw StoreError.damaged }
-        return try Self.openHeader(sealed, id: id)
+        return try Self.openHeader(sealed, id: id, key: key())
     }
 
     private func open(_ blob: Data, id: UUID) throws -> (header: Header, contents: Data) {
         let headerSize = try Self.checkPrefix(blob.prefix(Self.prefixSize), id: id)
         guard blob.count >= Self.prefixSize + headerSize else { throw StoreError.damaged }
-        let header = try Self.openHeader(Data(blob.dropFirst(Self.prefixSize).prefix(headerSize)), id: id)
+        let key = try key()
+        let header = try Self.openHeader(Data(blob.dropFirst(Self.prefixSize).prefix(headerSize)),
+                                         id: id, key: key)
         let contents = try VaultCrypto.open(Data(blob.dropFirst(Self.prefixSize + headerSize)),
-                                            authenticating: Self.context(id, "body"))
+                                            authenticating: Self.context(id, "body"), using: key)
         // Belt and braces: the id already ties the body to this file, and this
         // ties it to the header it was written with.
         guard contents.count == header.fileSize else { throw StoreError.damaged }
@@ -264,9 +289,11 @@ struct FileStore {
     private func seal(_ header: Header, contents: Data, id: UUID) throws -> Data {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
+        let key = try key()
         let sealedHeader = try VaultCrypto.seal(encoder.encode(header),
-                                                authenticating: Self.context(id, "header"))
-        let sealedBody = try VaultCrypto.seal(contents, authenticating: Self.context(id, "body"))
+                                                authenticating: Self.context(id, "header"), using: key)
+        let sealedBody = try VaultCrypto.seal(contents, authenticating: Self.context(id, "body"),
+                                              using: key)
         let size = UInt32(sealedHeader.count)
         let sizeBytes = Data([24, 16, 8, 0].map { UInt8(truncatingIfNeeded: size >> $0) })
         return Self.magic + id.bytes + sizeBytes + sealedHeader + sealedBody
@@ -287,8 +314,8 @@ struct FileStore {
         return size
     }
 
-    private static func openHeader(_ sealed: Data, id: UUID) throws -> Header {
-        let json = try VaultCrypto.open(sealed, authenticating: context(id, "header"))
+    private static func openHeader(_ sealed: Data, id: UUID, key: SymmetricKey) throws -> Header {
+        let json = try VaultCrypto.open(sealed, authenticating: context(id, "header"), using: key)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         do {

@@ -133,7 +133,11 @@ enum VaultCrypto {
 
     /// The key to seal or open with. Taken under the lock and used outside
     /// it, so a large file's encryption never holds up a lock or an unlock.
-    private static func currentKey() throws -> SymmetricKey {
+    ///
+    /// Internal rather than private for `FileStore`, which seals with this
+    /// key in the app and with one it is handed in a test. Nothing may write
+    /// it anywhere.
+    static func currentKey() throws -> SymmetricKey {
         guard let key = withSession({ sessionKey }) else { throw CryptoError.locked }
         return key
     }
@@ -185,8 +189,7 @@ enum VaultCrypto {
         guard ok else { throw CryptoError.keychain(errSecAllocate) }
 
         let key = try derive(passphrase: passphrase, salt: salt)
-        let sealed = try AES.GCM.seal(verifierPlaintext, using: key)
-        guard let verifier = sealed.combined else { throw CryptoError.malformed }
+        let verifier = try makeVerifier(using: key)
 
         try storeBlob(salt, account: saltAccount)
         try storeBlob(verifier, account: verifierAccount)
@@ -202,19 +205,38 @@ enum VaultCrypto {
             throw CryptoError.locked
         }
         let key = try derive(passphrase: passphrase, salt: salt)
-        guard let box = try? AES.GCM.SealedBox(combined: verifier),
-              let opened = try? AES.GCM.open(box, using: key),
-              opened == verifierPlaintext else {
-            return false
-        }
+        guard Self.verifier(verifier, accepts: key) else { return false }
         adopt(key)
         return true
     }
 
+    /// The verifier for a key: a known plaintext sealed under it, which only
+    /// that key opens. Stored beside the salt.
+    static func makeVerifier(using key: SymmetricKey) throws -> Data {
+        guard let combined = try AES.GCM.seal(verifierPlaintext, using: key).combined else {
+            throw CryptoError.malformed
+        }
+        return combined
+    }
+
+    static func verifier(_ verifier: Data, accepts key: SymmetricKey) -> Bool {
+        guard let box = try? AES.GCM.SealedBox(combined: verifier),
+              let opened = try? AES.GCM.open(box, using: key) else { return false }
+        return opened == verifierPlaintext
+    }
+
     // MARK: - Encrypt / decrypt
 
+    // Each operation comes twice: once under the session key, which is what
+    // the app uses, and once under a key it is handed. The second is how a
+    // test exercises the real format without a passphrase in the Keychain,
+    // and it is the same code, not a copy of it.
+
     static func encrypt(_ plaintext: String) throws -> Data {
-        let key = try currentKey()
+        try encrypt(plaintext, using: currentKey())
+    }
+
+    static func encrypt(_ plaintext: String, using key: SymmetricKey) throws -> Data {
         let sealed = try AES.GCM.seal(Data(plaintext.utf8), using: key)
         guard let combined = sealed.combined else { throw CryptoError.malformed }
         return magic + combined
@@ -222,7 +244,11 @@ enum VaultCrypto {
 
     static func decrypt(_ blob: Data) throws -> String {
         guard isEncrypted(blob) else { throw CryptoError.malformed }
-        let key = try currentKey()
+        return try decrypt(blob, using: currentKey())
+    }
+
+    static func decrypt(_ blob: Data, using key: SymmetricKey) throws -> String {
+        guard isEncrypted(blob) else { throw CryptoError.malformed }
         let body = blob.dropFirst(magic.count)
         guard let box = try? AES.GCM.SealedBox(combined: body),
               let opened = try? AES.GCM.open(box, using: key),
@@ -246,14 +272,22 @@ enum VaultCrypto {
     /// the item's id, which is what stops one file's contents being moved into
     /// another file and opening there as if they belonged.
     static func seal(_ plaintext: Data, authenticating context: Data) throws -> Data {
-        let key = try currentKey()
+        try seal(plaintext, authenticating: context, using: currentKey())
+    }
+
+    static func seal(_ plaintext: Data, authenticating context: Data,
+                     using key: SymmetricKey) throws -> Data {
         let sealed = try AES.GCM.seal(plaintext, using: key, authenticating: context)
         guard let combined = sealed.combined else { throw CryptoError.malformed }
         return combined
     }
 
     static func open(_ combined: Data, authenticating context: Data) throws -> Data {
-        let key = try currentKey()
+        try open(combined, authenticating: context, using: currentKey())
+    }
+
+    static func open(_ combined: Data, authenticating context: Data,
+                     using key: SymmetricKey) throws -> Data {
         guard let box = try? AES.GCM.SealedBox(combined: combined),
               let opened = try? AES.GCM.open(box, using: key, authenticating: context) else {
             throw CryptoError.authenticationFailed
@@ -263,7 +297,10 @@ enum VaultCrypto {
 
     // MARK: - Internals
 
-    private static func derive(passphrase: String, salt: Data) throws -> SymmetricKey {
+    /// Internal so a test can pin it to a known answer: a change here would
+    /// derive a different key from the same passphrase, and every vault
+    /// written before it would stop opening.
+    static func derive(passphrase: String, salt: Data) throws -> SymmetricKey {
         var derived = Data(count: keyBytes)
         let status = derived.withUnsafeMutableBytes { out in
             salt.withUnsafeBytes { saltBuf in

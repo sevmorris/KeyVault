@@ -13,11 +13,14 @@ actor GPGService {
         let pubResult = try await shell.run(gpg, arguments: ["--list-keys", "--with-colons", "--with-fingerprint"])
         let secResult = try await shell.run(gpg, arguments: ["--list-secret-keys", "--with-colons"])
 
-        let secretKeyIDs = parseSecretKeyIDs(from: secResult.stdout)
-        return parseKeys(from: pubResult.stdout, secretKeyIDs: secretKeyIDs)
+        let secretKeyIDs = Self.parseSecretKeyIDs(from: secResult.stdout)
+        return Self.parseKeys(from: pubResult.stdout, secretKeyIDs: secretKeyIDs)
     }
 
-    private func parseSecretKeyIDs(from output: String) -> Set<String> {
+    // The parsers are static — they read text and touch nothing — so a test
+    // can feed them gpg's output without running gpg.
+
+    static func parseSecretKeyIDs(from output: String) -> Set<String> {
         var ids = Set<String>()
         for line in output.components(separatedBy: "\n") {
             let fields = line.components(separatedBy: ":")
@@ -27,7 +30,7 @@ actor GPGService {
         return ids
     }
 
-    private func parseKeys(from output: String, secretKeyIDs: Set<String>) -> [EncryptionKey] {
+    static func parseKeys(from output: String, secretKeyIDs: Set<String>) -> [EncryptionKey] {
         var keys: [EncryptionKey] = []
         var currentKeyID: String?
         var currentAlgorithm: String?
@@ -73,7 +76,7 @@ actor GPGService {
                 }
             case "uid":
                 if currentName == nil {
-                    currentName = fields.count > 9 ? fields[9] : nil
+                    currentName = fields.count > 9 ? unescapeColonField(fields[9]) : nil
                 }
             default:
                 break
@@ -83,7 +86,7 @@ actor GPGService {
         return keys
     }
 
-    private func gpgAlgorithmName(_ pubkeyAlgoID: String) -> String {
+    private static func gpgAlgorithmName(_ pubkeyAlgoID: String) -> String {
         switch pubkeyAlgoID {
         case "1": return "RSA"
         case "17": return "DSA"
@@ -94,9 +97,33 @@ actor GPGService {
         }
     }
 
-    private func unixTimestampToDate(_ string: String) -> Date? {
+    private static func unixTimestampToDate(_ string: String) -> Date? {
         guard let ts = TimeInterval(string), ts > 0 else { return nil }
         return Date(timeIntervalSince1970: ts)
+    }
+
+    /// Undo the escaping `--with-colons` applies to a user id. gpg writes any
+    /// colon, backslash or control character in one as `\xNN`, since a bare
+    /// colon would split the field; a name like "Work: signing" otherwise
+    /// showed as "Work\x3a signing". The bytes are decoded as UTF-8 together,
+    /// because an escaped byte can be part of a longer character.
+    static func unescapeColonField(_ field: String) -> String {
+        guard field.contains("\\x") else { return field }
+        var bytes: [UInt8] = []
+        var rest = Substring(field)
+        while let range = rest.range(of: "\\x") {
+            bytes += Array(rest[..<range.lowerBound].utf8)
+            let hex = rest[range.upperBound...].prefix(2)
+            if hex.count == 2, let byte = UInt8(hex, radix: 16) {
+                bytes.append(byte)
+                rest = rest[hex.endIndex...]
+            } else {
+                bytes += Array("\\x".utf8)
+                rest = rest[range.upperBound...]
+            }
+        }
+        bytes += Array(rest.utf8)
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     /// The key-shape parameters for an algorithm.
