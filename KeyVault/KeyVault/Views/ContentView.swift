@@ -71,8 +71,9 @@ struct ContentView: View {
             Button("Later", role: .cancel) { }
         } message: {
             Text("""
-                Secrets saved before now are still stored as plain text, \
-                guarded only by the Keychain's permission prompt. Back up first \
+                Secrets saved before now are still stored as plain text. Those \
+                saved by earlier versions of KeyVault can be read by any app on \
+                this Mac without asking, until they are encrypted. Back up first \
                 if you have not — this cannot be undone without your passphrase.
                 """)
         }

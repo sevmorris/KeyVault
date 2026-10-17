@@ -404,10 +404,6 @@ final class KeyVaultViewModel {
         idleWatcher.reset()
     }
 
-    /// Whether this launch has closed the ACLs an earlier build opened on
-    /// plaintext items. Once a launch is enough: nothing this build writes
-    /// opens one.
-    @ObservationIgnored private var didRestrictPlaintextAccess = false
 
     /// Something launch found to say — a passphrase change it finished or
     /// undid — held for the first reload, which is where errors are shown and
@@ -428,17 +424,6 @@ final class KeyVaultViewModel {
         if let launchNotice {
             self.launchNotice = nil
             await appendError(launchNotice)
-        }
-
-        // Plaintext needs no vault key, so this runs locked or not.
-        if !didRestrictPlaintextAccess {
-            didRestrictPlaintextAccess = true
-            let result = SecretStore.restrictPlaintextAccess()
-            if result.failed > 0 {
-                await appendError("\(result.failed) secret(s) stored as plain text are still open to "
-                                  + "every app on this Mac, which can read them without asking. "
-                                  + "Encrypting them under a master passphrase, in Settings, fixes that.")
-            }
         }
 
         async let sshKeys = loadSSH()
