@@ -105,6 +105,12 @@ enum SecretStore {
     /// only thing between a note and every other process running as you, and
     /// every write used to open the ACL regardless — so in the state the app
     /// starts in, any process could read every secret without being asked.
+    ///
+    /// Set only when an item is added: changing it later asks the user (see
+    /// `canChangeACLWithoutAsking`). The cost is that an item added as plain
+    /// text keeps this app as its only trusted reader after it is encrypted,
+    /// so a differently signed build — a local one, say — has to be allowed
+    /// at a prompt for each such item.
     private static func acl(forPayload payload: Data) -> SecAccess? {
         VaultCrypto.isEncrypted(payload) ? permissiveAccess() : ownAccess()
     }
@@ -117,7 +123,7 @@ enum SecretStore {
         }
 
         var query = baseQuery(id: key.id)
-        let payload = try protectedPayload(secretData)
+        let payload = try protectedPayload(secretData, for: key.id)
         query[kSecValueData] = payload
         query[kSecAttrAccessible] = kSecAttrAccessibleWhenUnlocked
         if let access = acl(forPayload: payload) { query[kSecAttrAccess] = access }
@@ -140,16 +146,17 @@ enum SecretStore {
             guard let data = newSecret.data(using: .utf8) else {
                 throw KeyError.keychainError(errSecParam)
             }
-            let payload = try protectedPayload(data)
-            changes[kSecValueData] = payload
             // Editing an item written before the passphrase was set encrypts
             // it on the way back down, so the vault protects itself as you
-            // touch it, and the ACL follows what is now stored.
-            if let access = acl(forPayload: payload) { changes[kSecAttrAccess] = access }
+            // touch it.
+            changes[kSecValueData] = try protectedPayload(data, for: key.id)
         }
-        // A change to metadata alone leaves the ACL as it is. Which ACL is
-        // right depends on the payload, and reading the payload just to decide
-        // would make filing a note read the secret it holds.
+        // Never the ACL, whatever the payload has become. An item added since
+        // plain text was kept to this app has no application allowed to
+        // change its ACL (`ownAccess()`), so setting one here — even to the
+        // same thing — puts up a macOS dialog asking the user's permission,
+        // for every edit and every restore. The ACL is chosen once, when the
+        // item is added. See `acl(forPayload:)` for what that costs.
 
         let status = SecItemUpdate(baseQuery(id: key.id) as CFDictionary,
                                    changes as CFDictionary)
@@ -190,27 +197,29 @@ enum SecretStore {
                 // Already ciphertext, but it may still carry the restrictive ACL
                 // a previous build stamped on it. Relaxing costs one update and
                 // saves a dialog per item on every future export.
-                relaxAccess(for: id)
+                relaxAccessIfAllowed(for: id)
+                if VaultCrypto.isVersion1(blob) { upgradeToVersion2(id: id, payload: blob) }
                 alreadyDone += 1
                 continue
             }
 
             guard let plaintext = String(data: blob, encoding: .utf8),
-                  let sealed = try? VaultCrypto.encrypt(plaintext) else {
+                  let sealed = try? VaultCrypto.encrypt(plaintext, for: id) else {
                 failed += 1
                 continue
             }
-            // Ciphertext now, so its ACL opens with it. Plain text was kept to
-            // this app alone, and left that way it would bring back a dialog
-            // per item whenever a differently signed build reads the vault.
-            var changes: [CFString: Any] = [kSecValueData: sealed]
-            if let access = permissiveAccess() { changes[kSecAttrAccess] = access }
+            // The payload alone. Its ACL is widened afterwards, and only where
+            // that needs nobody's permission; see `relaxAccessIfAllowed`.
             let status = SecItemUpdate(baseQuery(id: id) as CFDictionary,
-                                       changes as CFDictionary)
+                                       [kSecValueData: sealed] as CFDictionary)
             if status == errSecSuccess {
+                relaxAccessIfAllowed(for: id)
                 // Read back before counting it: this file has already shipped a
-                // sweep that trusted errSecSuccess and protected nothing.
-                if let check = rawPayload(for: id), VaultCrypto.isEncrypted(check) {
+                // sweep that trusted errSecSuccess and protected nothing. And
+                // opened, not just recognised: ciphertext that does not give
+                // back the secret is a secret lost.
+                if let check = rawPayload(for: id),
+                   (try? VaultCrypto.decrypt(check, for: id)) == plaintext {
                     encrypted += 1
                 } else {
                     failed += 1
@@ -222,46 +231,55 @@ enum SecretStore {
         return (encrypted, alreadyDone, failed)
     }
 
-    /// Widen one item's ACL to any application. Best-effort: an item that
-    /// refuses is left alone rather than failing the sweep, because the ACL is
-    /// convenience and the encryption is the protection.
-    private static func relaxAccess(for id: UUID) {
-        guard let access = permissiveAccess() else { return }
+    /// Re-seal a version 1 payload as version 2, binding it to its item. See
+    /// `VaultCrypto.magicV2`.
+    ///
+    /// Best-effort, like `relaxAccess`: a version 1 payload is still sealed
+    /// under the passphrase, so one that will not upgrade is left as it is
+    /// rather than failing the sweep. Written only once it has opened, and
+    /// read back and opened again afterwards; if that fails, the payload it
+    /// replaced is put back.
+    private static func upgradeToVersion2(id: UUID, payload: Data) {
+        guard let plaintext = try? VaultCrypto.decrypt(payload, for: id),
+              let sealed = try? VaultCrypto.encrypt(plaintext, for: id),
+              SecItemUpdate(baseQuery(id: id) as CFDictionary,
+                            [kSecValueData: sealed] as CFDictionary) == errSecSuccess else { return }
+        if let check = rawPayload(for: id), (try? VaultCrypto.decrypt(check, for: id)) == plaintext {
+            return
+        }
+        _ = SecItemUpdate(baseQuery(id: id) as CFDictionary, [kSecValueData: payload] as CFDictionary)
+    }
+
+    /// Widen one item's ACL to any application, where that needs nobody's
+    /// permission. Best-effort: an item that refuses is left alone rather than
+    /// failing the sweep, because the ACL is convenience and the encryption is
+    /// the protection.
+    ///
+    /// Items written by builds before plain text was restricted let any
+    /// application change their ACL, and widening those is silent. Items
+    /// added since — `ownAccess()` — let none, so a change would put up a
+    /// macOS permission dialog per item; they are skipped, and keep this app
+    /// as their only trusted reader.
+    private static func relaxAccessIfAllowed(for id: UUID) {
+        guard canChangeACLWithoutAsking(id: id), let access = permissiveAccess() else { return }
         _ = SecItemUpdate(baseQuery(id: id) as CFDictionary,
                           [kSecAttrAccess: access] as CFDictionary)
     }
 
-    /// Close the ACL on every plaintext item an earlier build opened to any
-    /// application, so other apps have to ask for it again.
-    ///
-    /// Run once a launch. Only items whose ACL is open are read at all, and
-    /// reading an open item never prompts; ciphertext among them is left
-    /// open, which is its intended state. Re-runnable, and cheap once there is
-    /// nothing left to close. Counted only once the ACL reads back closed,
-    /// because a Keychain write reporting success has fooled this file before.
-    @discardableResult
-    static func restrictPlaintextAccess() -> (restricted: Int, failed: Int) {
-        var restricted = 0, failed = 0
-        for id in allAccountIDs() where isOpenToAnyApplication(id: id) {
-            guard let blob = rawPayload(for: id) else { failed += 1; continue }
-            guard !VaultCrypto.isEncrypted(blob) else { continue }
-            guard let access = ownAccess(),
-                  SecItemUpdate(baseQuery(id: id) as CFDictionary,
-                                [kSecAttrAccess: access] as CFDictionary) == errSecSuccess,
-                  !isOpenToAnyApplication(id: id) else {
-                failed += 1
-                continue
-            }
-            restricted += 1
-        }
-        return (restricted, failed)
-    }
+    // There is deliberately no pass that closes the ACL on plain text an
+    // earlier build opened. One shipped, and could not work: on this
+    // keychain, SecItemUpdate with an access object adds its entries to the
+    // item's existing ones rather than replacing them, so the "any
+    // application" entry survived; SecKeychainItemSetAccess, which does
+    // replace them, needs the user's permission at a dialog for every item,
+    // and so did each retry. Measured on 2026-10-16 in a scratch keychain.
+    // Encrypting under a master passphrase is what protects those items.
 
-    /// Whether any application may decrypt an item without being asked: the
-    /// NULL application list `permissiveAccess()` writes on its decrypt ACL.
-    /// Read from the item's access object, which prompts for nothing —
-    /// looking at an ACL is not reading the secret behind it.
-    private static func isOpenToAnyApplication(id: UUID) -> Bool {
+    /// Whether any application may change an item's ACL without asking: a
+    /// NULL application list on its change-ACL entry. Read from the item's
+    /// access object, which prompts for nothing — looking at an ACL is not
+    /// reading the secret behind it.
+    private static func canChangeACLWithoutAsking(id: UUID) -> Bool {
         var query = baseQuery(id: id)
         query[kSecReturnRef] = true
         query[kSecMatchLimit] = kSecMatchLimitOne
@@ -276,11 +294,11 @@ enum SecretStore {
         guard SecAccessCopyACLList(access, &aclList) == errSecSuccess,
               let acls = aclList as? [SecACL] else { return false }
 
-        let decrypt = kSecACLAuthorizationDecrypt as String
-        let any = kSecACLAuthorizationAny as String
-        return acls.contains { acl in
-            let authorizations = SecACLCopyAuthorizations(acl) as? [String] ?? []
-            guard authorizations.contains(decrypt) || authorizations.contains(any) else { return false }
+        let changeACL = kSecACLAuthorizationChangeACL as String
+        let entries = acls.filter { (SecACLCopyAuthorizations($0) as? [String] ?? []).contains(changeACL) }
+        // Every change-ACL entry has to be open; one that is not is enough
+        // for the Keychain to ask.
+        return !entries.isEmpty && entries.allSatisfy { acl in
             var apps: CFArray?
             var description: CFString?
             var prompt = SecKeychainPromptSelector()
@@ -300,6 +318,12 @@ enum SecretStore {
     /// VaultCrypto keeps alongside them are filtered out for free: their
     /// accounts are names, not UUIDs.
     private static func allAccountIDs() -> [UUID] {
+        allAccounts().compactMap(UUID.init(uuidString:))
+    }
+
+    /// Every account name under this service: the items, the salt and
+    /// verifier, and anything a passphrase change has staged.
+    private static func allAccounts() -> [String] {
         let query: [CFString: Any] = [
             kSecClass: kSecClassGenericPassword,
             kSecAttrService: keychainService,
@@ -313,9 +337,7 @@ enum SecretStore {
               let items = result as? [[CFString: Any]] else {
             return []
         }
-        return items.compactMap {
-            ($0[kSecAttrAccount] as? String).flatMap(UUID.init(uuidString:))
-        }
+        return items.compactMap { $0[kSecAttrAccount] as? String }
     }
 
     private static func rawPayload(for id: UUID) -> Data? {
@@ -330,13 +352,13 @@ enum SecretStore {
     /// Encrypt when a passphrase is configured and the vault is open. Before
     /// that, storage is plaintext exactly as it always was — the app has to
     /// keep working for someone who has not set one yet.
-    private static func protectedPayload(_ plaintext: Data) throws -> Data {
+    private static func protectedPayload(_ plaintext: Data, for id: UUID) throws -> Data {
         guard VaultCrypto.isConfigured else { return plaintext }
         guard VaultCrypto.isUnlocked else { throw VaultCrypto.CryptoError.locked }
         guard let text = String(data: plaintext, encoding: .utf8) else {
             throw KeyError.keychainError(errSecParam)
         }
-        return try VaultCrypto.encrypt(text)
+        return try VaultCrypto.encrypt(text, for: id)
     }
 
     // MARK: - Read
@@ -349,7 +371,7 @@ enum SecretStore {
             throw KeyError.keychainError(errSecItemNotFound)
         }
         if VaultCrypto.isEncrypted(data) {
-            return try VaultCrypto.decrypt(data)
+            return try VaultCrypto.decrypt(data, for: id)
         }
         // Written before a passphrase was set. Still readable, and still
         // exposed — encryptExistingSecrets() is what fixes that.
@@ -494,5 +516,75 @@ enum SecretStore {
     private static func saveLegacyMetaDict(_ dict: [String: LegacyMeta]) {
         guard let data = try? JSONEncoder().encode(dict) else { return }
         UserDefaults.app.set(data, forKey: legacyMetaDefaultsKey)
+    }
+}
+
+// MARK: - Re-keying
+
+/// What `PassphraseChange` needs from the Keychain's items. A staged payload is
+/// a separate item under the same service, its account the item's id with
+/// `.next` appended — not a UUID, so `loadAll`, the export and every sweep
+/// pass over it as they pass over the salt.
+extension SecretStore {
+    private static let stagedSuffix = ".next"
+
+    static func rekeyableIDs() -> [UUID] { allAccountIDs() }
+
+    static func rekeyPayload(for id: UUID) -> Data? { rawPayload(for: id) }
+
+    private static func stagedQuery(id: UUID) -> [CFString: Any] {
+        var query = baseQuery(id: id)
+        query[kSecAttrAccount] = id.uuidString + stagedSuffix
+        return query
+    }
+
+    /// Ciphertext, so opened to any application like every other ciphertext
+    /// item; see `permissiveAccess()`. Replaces a staged copy already there.
+    static func stage(_ payload: Data, for id: UUID) throws {
+        SecItemDelete(stagedQuery(id: id) as CFDictionary)
+        var add = stagedQuery(id: id)
+        add[kSecValueData] = payload
+        add[kSecAttrAccessible] = kSecAttrAccessibleWhenUnlocked
+        if let access = permissiveAccess() { add[kSecAttrAccess] = access }
+        let status = SecItemAdd(add as CFDictionary, nil)
+        guard status == errSecSuccess else { throw KeyError.keychainError(status) }
+    }
+
+    static func stagedIDs() -> [UUID] {
+        allAccounts().compactMap { account in
+            guard account.hasSuffix(stagedSuffix) else { return nil }
+            return UUID(uuidString: String(account.dropLast(stagedSuffix.count)))
+        }
+    }
+
+    static func stagedPayload(for id: UUID) -> Data? {
+        var query = stagedQuery(id: id)
+        query[kSecReturnData] = true
+        query[kSecMatchLimit] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess else { return nil }
+        return result as? Data
+    }
+
+    /// The item's payload replaced by the staged one in a single update,
+    /// which leaves its name, metadata and ACL as they were. The staged copy
+    /// goes only once the item reads back with it.
+    static func promoteStaged(for id: UUID) throws {
+        guard let staged = stagedPayload(for: id) else { return }
+        let status = SecItemUpdate(baseQuery(id: id) as CFDictionary,
+                                   [kSecValueData: staged] as CFDictionary)
+        switch status {
+        case errSecSuccess:
+            guard rawPayload(for: id) == staged else { throw KeyError.keychainError(errSecIO) }
+        case errSecItemNotFound:
+            break
+        default:
+            throw KeyError.keychainError(status)
+        }
+        discardStaged(for: id)
+    }
+
+    static func discardStaged(for id: UUID) {
+        SecItemDelete(stagedQuery(id: id) as CFDictionary)
     }
 }

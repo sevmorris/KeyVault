@@ -12,51 +12,65 @@ actor SSHService {
         let contents = (try? fm.contentsOfDirectory(atPath: Self.sshDir)) ?? []
         let pubFiles = contents.filter { $0.hasSuffix(".pub") }
 
-        var keys: [EncryptionKey] = []
-        for pubFile in pubFiles {
-            let pubPath = Self.sshDir + "/" + pubFile
-            let privateName = String(pubFile.dropLast(4)) // remove .pub
-            let privatePath = Self.sshDir + "/" + privateName
-
-            let result = try await shell.run(
-                Self.sshKeygenPath,
-                arguments: ["-l", "-E", "sha256", "-f", pubPath]
-            )
-
-            guard result.status == 0 else { continue }
-
-            // Output format: "2048 SHA256:xxxx comment (RSA)"
-            let output = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-            let parts = output.split(separator: " ", maxSplits: 3)
-
-            var fingerprint: String?
-            var algorithm: String?
-
-            if parts.count >= 2 {
-                fingerprint = String(parts[1])
+        // One ssh-keygen per key, all at once rather than one after another:
+        // each is a process launch, and a ~/.ssh with a dozen keys made the
+        // list wait for a dozen in a row. The order they finish in does not
+        // matter; the result is sorted.
+        let keys = try await withThrowingTaskGroup(of: EncryptionKey?.self) { group in
+            for pubFile in pubFiles {
+                group.addTask { try await self.key(forPublicKeyFile: pubFile) }
             }
-            if parts.count >= 4 {
-                let last = String(parts[3])
-                algorithm = last.trimmingCharacters(in: CharacterSet(charactersIn: "()"))
+            var keys: [EncryptionKey] = []
+            for try await key in group {
+                if let key { keys.append(key) }
             }
+            return keys
+        }
+        return keys.sorted { $0.name < $1.name }
+    }
 
-            let pubKeyText = (try? String(contentsOfFile: pubPath, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let hasPrivate = fm.fileExists(atPath: privatePath)
+    private func key(forPublicKeyFile pubFile: String) async throws -> EncryptionKey? {
+        let fm = FileManager.default
+        let pubPath = Self.sshDir + "/" + pubFile
+        let privateName = String(pubFile.dropLast(4)) // remove .pub
+        let privatePath = Self.sshDir + "/" + privateName
 
-            let key = EncryptionKey(
-                id: UUID(stableIdentity: "ssh:\(privatePath)"),
-                type: .ssh,
-                name: privateName,
-                fingerprint: fingerprint,
-                publicKey: pubKeyText,
-                algorithm: algorithm,
-                path: privatePath,
-                hasPrivateKey: hasPrivate
-            )
-            keys.append(key)
+        let result = try await shell.run(
+            Self.sshKeygenPath,
+            arguments: ["-l", "-E", "sha256", "-f", pubPath]
+        )
+
+        guard result.status == 0 else { return nil }
+
+        // Output format: "2048 SHA256:xxxx comment (RSA)"
+        let output = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = output.split(separator: " ", maxSplits: 3)
+
+        var fingerprint: String?
+        var algorithm: String?
+
+        if parts.count >= 2 {
+            fingerprint = String(parts[1])
+        }
+        if parts.count >= 4 {
+            let last = String(parts[3])
+            algorithm = last.trimmingCharacters(in: CharacterSet(charactersIn: "()"))
         }
 
-        return keys.sorted { $0.name < $1.name }
+        let pubKeyText = (try? String(contentsOfFile: pubPath, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasPrivate = fm.fileExists(atPath: privatePath)
+
+        let key = EncryptionKey(
+            id: UUID(stableIdentity: "ssh:\(privatePath)"),
+            type: .ssh,
+            name: privateName,
+            fingerprint: fingerprint,
+            publicKey: pubKeyText,
+            algorithm: algorithm,
+            path: privatePath,
+            hasPrivateKey: hasPrivate
+        )
+        return key
     }
 
     /// Generate a key pair at `path`.

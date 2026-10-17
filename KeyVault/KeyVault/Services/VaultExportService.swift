@@ -18,6 +18,12 @@ actor VaultExportService {
     private let shell = ShellService()
     private let files: FileStore
 
+    /// For a new archive only. It leaves this Mac, and once it is somewhere
+    /// else nothing limits how fast its passphrase can be guessed, so it is
+    /// held to more than the master passphrase's 8. Restore takes whatever an
+    /// archive was made with: older ones predate the rule.
+    static let minimumPassphraseLength = 12
+
     init(files: FileStore = .standard) {
         self.files = files
     }
@@ -30,8 +36,8 @@ actor VaultExportService {
 
     /// Encrypt every stored secret and file to an armored OpenPGP document.
     func exportArchive(passphrase: String) async throws -> String {
-        guard !passphrase.isEmpty else {
-            throw KeyError.exportFailed("A passphrase is required.")
+        guard passphrase.count >= Self.minimumPassphraseLength else {
+            throw KeyError.exportFailed("The passphrase needs at least \(Self.minimumPassphraseLength) characters.")
         }
 
         let keys = SecretStore.loadAll()
@@ -89,7 +95,8 @@ actor VaultExportService {
         encoder.dateEncodingStrategy = .iso8601
         let plaintext = try encoder.encode(archive)
 
-        return try await encrypt(plaintext, passphrase: passphrase)
+        // Composed, as the master passphrase is; see VaultCrypto.normalized.
+        return try await encrypt(plaintext, passphrase: VaultCrypto.normalized(passphrase))
     }
 
     private func encrypt(_ plaintext: Data, passphrase: String) async throws -> String {
@@ -124,11 +131,28 @@ actor VaultExportService {
 
     /// Decrypt and parse an archive. Returns its items without writing
     /// anything — deciding what to do with a collision is the caller's job.
+    ///
+    /// The passphrase is tried composed first, then as typed when that
+    /// differs: archives written before export normalised it were encrypted
+    /// with the bytes as typed.
     func readArchive(armored: String, passphrase: String) async throws -> VaultArchive {
-        let gpg = try gpgPath()
         guard let ciphertext = armored.data(using: .utf8) else {
             throw KeyError.exportFailed("Archive is not valid text.")
         }
+        for candidate in VaultCrypto.candidates(for: passphrase) {
+            do {
+                return try await decrypt(ciphertext, passphrase: candidate)
+            } catch is WrongPassphrase {
+                continue
+            }
+        }
+        throw KeyError.exportFailed("Wrong passphrase.")
+    }
+
+    private struct WrongPassphrase: Error {}
+
+    private func decrypt(_ ciphertext: Data, passphrase: String) async throws -> VaultArchive {
+        let gpg = try gpgPath()
         let passFile = try writeTemporaryPassphraseFile(passphrase)
         defer { try? FileManager.default.removeItem(at: passFile.dir) }
 
@@ -140,17 +164,28 @@ actor VaultExportService {
                 "--passphrase-file", passFile.file.path,
                 "--decrypt"
             ],
-            stdinData: ciphertext
+            stdinData: ciphertext,
+            // The wrong-passphrase check below reads gpg's messages, and a
+            // gpg built with translations — GPG Suite's is; Homebrew's is
+            // not — writes them in the Mac's language, so a mistyped
+            // passphrase came back as a raw gpg error. LANGUAGE is emptied as
+            // well, since gettext consults it ahead of the locale.
+            environment: Self.untranslated
         )
 
         guard result.status == 0, let data = result.stdout.data(using: .utf8) else {
-            throw KeyError.exportFailed(
-                result.stderr.contains("Bad session key") || result.stderr.contains("decryption failed")
-                    ? "Wrong passphrase."
-                    : (result.stderr.isEmpty ? "gpg failed" : result.stderr)
-            )
+            if result.stderr.contains("Bad session key") || result.stderr.contains("decryption failed") {
+                throw WrongPassphrase()
+            }
+            throw KeyError.exportFailed(result.stderr.isEmpty ? "gpg failed" : result.stderr)
         }
 
+        return try Self.decodeArchive(data)
+    }
+
+    /// The decrypted JSON, parsed and checked for a version this build can
+    /// read. Apart from `readArchive` so it can be tested without gpg.
+    static func decodeArchive(_ data: Data) throws -> VaultArchive {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let archive = try decoder.decode(VaultArchive.self, from: data)
@@ -174,10 +209,55 @@ actor VaultExportService {
     /// than none; a restore that silently declines to write one is the same
     /// bargain, and the user is equally entitled to hear about it.
     func restore(_ archive: VaultArchive) throws -> (added: Int, updated: Int, skipped: Int) {
-        // Every file is decoded, and the passphrase they need checked for,
-        // before anything is written — so a damaged file, or a vault that
-        // cannot hold one, stops the restore at the door rather than half way
-        // through it.
+        // Whole items by id, where a set of ids used to do: restoring an item
+        // has to know the category it is already filed under. A repeated id
+        // keeps the first rather than trapping, as `uniqueKeysWithValues`
+        // would — the set this replaced tolerated one too.
+        let existing = Dictionary(SecretStore.loadAll().map { ($0.id, $0) },
+                                  uniquingKeysWith: { first, _ in first })
+        let plan = try Self.plan(archive, existing: existing,
+                                 canStoreFiles: VaultCrypto.isConfigured,
+                                 fileExists: files.exists(id:))
+
+        for write in plan.writes {
+            switch write {
+            case .file(let key, let contents):
+                try files.save(key, contents: contents)
+            case .secret(let key, let secret, let isUpdate):
+                if isUpdate {
+                    try SecretStore.update(key, newSecret: secret)
+                } else {
+                    try SecretStore.save(key, secret: secret)
+                }
+            }
+        }
+        return (plan.added, plan.updated, plan.skipped)
+    }
+
+    /// What a restore will write, decided before anything is written.
+    struct RestorePlan {
+        enum Write {
+            case file(EncryptionKey, Data)
+            case secret(EncryptionKey, String, isUpdate: Bool)
+        }
+        var writes: [Write] = []
+        var added = 0
+        var updated = 0
+        var skipped = 0
+    }
+
+    /// Every rule a restore follows, and none of the storage. Kept apart from
+    /// `restore` so the rules can be tested without a Keychain: `existing` is
+    /// what the vault already holds, by id, and `fileExists` says which files
+    /// the file store has.
+    ///
+    /// Every file is decoded, and the passphrase they need checked for, before
+    /// anything is written — so a damaged file, or a vault that cannot hold
+    /// one, stops the restore at the door rather than half way through it.
+    static func plan(_ archive: VaultArchive,
+                     existing: [UUID: EncryptionKey],
+                     canStoreFiles: Bool,
+                     fileExists: (UUID) -> Bool) throws -> RestorePlan {
         var fileContents: [UUID: Data] = [:]
         for item in archive.items where item.type == KeyType.file.rawValue {
             // Whitespace is forgiven — the archive is meant to be editable by
@@ -189,7 +269,7 @@ actor VaultExportService {
             }
             fileContents[item.id] = contents
         }
-        if !fileContents.isEmpty && !VaultCrypto.isConfigured {
+        if !fileContents.isEmpty && !canStoreFiles {
             throw KeyError.importFailed(
                 "This archive holds \(fileContents.count) file(s), and KeyVault stores files only "
                 + "under a master passphrase. Set one in Settings, then restore again — nothing "
@@ -197,19 +277,10 @@ actor VaultExportService {
             )
         }
 
-        // Whole items by id, where a set of ids used to do: restoring an item
-        // has to know the category it is already filed under. A repeated id
-        // keeps the first rather than trapping, as `uniqueKeysWithValues`
-        // would — the set this replaced tolerated one too.
-        let existing = Dictionary(SecretStore.loadAll().map { ($0.id, $0) },
-                                  uniquingKeysWith: { first, _ in first })
-        var added = 0
-        var updated = 0
-        var skipped = 0
-
+        var plan = RestorePlan()
         for item in archive.items {
             guard let type = KeyType(rawValue: item.type), type.isStored else {
-                skipped += 1
+                plan.skipped += 1
                 continue
             }
             if type == .file {
@@ -223,9 +294,8 @@ actor VaultExportService {
                     fileName: item.fileName ?? item.name,
                     hasPrivateKey: false
                 )
-                let existed = files.exists(id: item.id)
-                try files.save(key, contents: contents)
-                if existed { updated += 1 } else { added += 1 }
+                plan.writes.append(.file(key, contents))
+                if fileExists(item.id) { plan.updated += 1 } else { plan.added += 1 }
                 continue
             }
             let key = EncryptionKey(
@@ -245,18 +315,16 @@ actor VaultExportService {
                 createdDate: item.createdDate,
                 hasPrivateKey: false
             )
-            if existing[item.id] != nil {
-                try SecretStore.update(key, newSecret: item.secret)
-                updated += 1
-            } else {
-                try SecretStore.save(key, secret: item.secret)
-                added += 1
-            }
+            let isUpdate = existing[item.id] != nil
+            plan.writes.append(.secret(key, item.secret, isUpdate: isUpdate))
+            if isUpdate { plan.updated += 1 } else { plan.added += 1 }
         }
-        return (added, updated, skipped)
+        return plan
     }
 
     // MARK: - Helpers
+
+    static let untranslated = ["LC_ALL": "C", "LANGUAGE": ""]
 
     private func writeTemporaryPassphraseFile(_ passphrase: String) throws -> (dir: URL, file: URL) {
         let dir = FileManager.default.temporaryDirectory

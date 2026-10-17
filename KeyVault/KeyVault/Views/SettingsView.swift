@@ -6,18 +6,32 @@ struct SettingsView: View {
     @State private var newPath = ""
     @State private var plaintextRemaining = 0
 
+    /// The settings being edited, copied from the view model when the sheet
+    /// opens and handed back only by Save.
+    ///
+    /// Binding the form straight to `viewModel.settings` made Cancel a lie:
+    /// every change landed the moment it was made, so the idle-lock picker
+    /// took effect at once, a removed Age path stayed removed, and Cancel only
+    /// skipped writing them to disk, so they held until the app quit.
+    @State private var draft: AppSettings
+
+    init(viewModel: KeyVaultViewModel) {
+        self.viewModel = viewModel
+        _draft = State(initialValue: viewModel.settings)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             Form {
                 Section {
-                    ForEach(viewModel.settings.ageKeyPaths, id: \.self) { path in
+                    ForEach(draft.ageKeyPaths, id: \.self) { path in
                         HStack {
                             Text(path)
                                 .font(.system(.body, design: .monospaced))
                                 .foregroundStyle(.primary)
                             Spacer()
                             Button {
-                                viewModel.settings.ageKeyPaths.removeAll { $0 == path }
+                                draft.ageKeyPaths.removeAll { $0 == path }
                             } label: {
                                 Image(systemName: "minus.circle.fill")
                                     .foregroundStyle(.red)
@@ -32,8 +46,8 @@ struct SettingsView: View {
                         Button {
                             let trimmed = newPath.trimmingCharacters(in: .whitespaces)
                             guard !trimmed.isEmpty,
-                                  !viewModel.settings.ageKeyPaths.contains(trimmed) else { return }
-                            viewModel.settings.ageKeyPaths.append(trimmed)
+                                  !draft.ageKeyPaths.contains(trimmed) else { return }
+                            draft.ageKeyPaths.append(trimmed)
                             newPath = ""
                         } label: {
                             Image(systemName: "plus.circle.fill")
@@ -78,7 +92,7 @@ struct SettingsView: View {
                             }
                             .disabled(viewModel.vaultIsLocked)
                         }
-                        Picker("Lock when idle", selection: $viewModel.settings.idleLockMinutes) {
+                        Picker("Lock when idle", selection: $draft.idleLockMinutes) {
                             Text("Never").tag(0)
                             Text("After 1 minute").tag(1)
                             Text("After 5 minutes").tag(5)
@@ -96,6 +110,10 @@ struct SettingsView: View {
                                 viewModel.showVaultUnlock = true
                             }
                         } else {
+                            Button("Change Passphrase…") {
+                                dismiss()
+                                viewModel.showChangePassphrase = true
+                            }
                             Button("Lock Vault Now") {
                                 viewModel.lockVault()
                                 dismiss()
@@ -112,8 +130,8 @@ struct SettingsView: View {
                     Text("Security")
                 } footer: {
                     Text(viewModel.isVaultConfigured
-                         ? "Secrets are encrypted with your master passphrase before they are stored, so nothing else on this Mac can read them. An idle lock hides the vault and can be reopened with Touch ID; Lock Vault Now forgets the passphrase, so only typing it again will open the vault. Repair Keychain Access widens the Keychain permissions on every item, which stops macOS asking for your login password once per note after the app is rebuilt or re-signed."
-                         : "Without a master passphrase, notes and API keys are stored as plain text, and only the Keychain's permission prompt stands between them and other apps. Setting one encrypts them before they are stored, and lets KeyVault store files, which it keeps only encrypted.")
+                         ? "Secrets are encrypted with your master passphrase before they are stored, so nothing else on this Mac can read them. The vault locks when left idle and whenever the Mac sleeps, locks its screen or switches user; Touch ID can reopen it then, on a Mac that has it. Lock Vault Now forgets the passphrase, so only typing it again will open the vault. Repair Keychain Access widens the Keychain permissions on items saved by earlier versions, which stops macOS asking for your login password once per note after the app is rebuilt or re-signed. Notes first saved as plain text by this version keep KeyVault as their only trusted app, because widening them would itself ask for permission once per note."
+                         : "Without a master passphrase, notes and API keys are stored as plain text. Other apps have to be allowed at a prompt to read one saved by this version, but any app can read those saved by earlier versions, without asking, until they are encrypted. Setting one encrypts them before they are stored, and lets KeyVault store files, which it keeps only encrypted.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -126,7 +144,7 @@ struct SettingsView: View {
                     .keyboardShortcut(.cancelAction)
                 Spacer()
                 Button("Save") {
-                    viewModel.saveSettings()
+                    viewModel.saveSettings(draft)
                     Task { await viewModel.reload() }
                     dismiss()
                 }

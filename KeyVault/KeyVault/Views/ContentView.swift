@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @Bindable var viewModel: KeyVaultViewModel
+    @FocusState private var isSearchFocused: Bool
 
     var body: some View {
         Group {
@@ -61,14 +62,18 @@ struct ContentView: View {
                 viewModel.offerEncryptExisting = wasSetup
             }, onCancel: { viewModel.showVaultSetup = false })
         }
+        .sheet(isPresented: $viewModel.showChangePassphrase) {
+            ChangePassphraseView(viewModel: viewModel)
+        }
         .alert("Encrypt what is already stored?",
                isPresented: $viewModel.offerEncryptExisting) {
             Button("Encrypt Now") { Task { await viewModel.encryptExistingSecrets() } }
             Button("Later", role: .cancel) { }
         } message: {
             Text("""
-                Secrets saved before now are still stored as plain text, \
-                guarded only by the Keychain's permission prompt. Back up first \
+                Secrets saved before now are still stored as plain text. Those \
+                saved by earlier versions of KeyVault can be read by any app on \
+                this Mac without asking, until they are encrypted. Back up first \
                 if you have not — this cannot be undone without your passphrase.
                 """)
         }
@@ -105,6 +110,11 @@ struct ContentView: View {
                 EmptyStateView(type: viewModel.selectedType)
             }
         }
+        // In the toolbar, for the same reason as the buttons below: attached
+        // to a column, it would be squeezed into that column's slice.
+        .searchable(text: $viewModel.searchText, placement: .toolbar, prompt: "Search")
+        .searchFocused($isSearchFocused)
+        .onChange(of: viewModel.searchFocusRequest) { isSearchFocused = true }
         // Attached to the NavigationSplitView, not to a column. A column's
         // .toolbar is confined to that column's slice of the toolbar, so the
         // sidebar's ~220pt gave Backup and Settings nowhere to render and they

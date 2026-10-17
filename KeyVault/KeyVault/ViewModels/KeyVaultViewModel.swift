@@ -10,7 +10,19 @@ final class KeyVaultViewModel {
     /// app is for, and a flat list of all five buried them.
     var selectedType: KeyType? = .note
     var selectedKeyID: UUID? = nil
+    /// What the toolbar's search field holds. It narrows the list within the
+    /// sidebar's selection rather than searching every type at once, so the
+    /// list keeps the shape — notes under their categories — it had before
+    /// you typed.
+    var searchText = ""
+    /// Bumped by Find (⌘F) to put the cursor in the search field. A counter
+    /// rather than a flag, so asking twice is still a change to observe.
+    var searchFocusRequest = 0
     var isLoading = false
+    /// The indexed keys — SSH, GPG, Age — are still being read. Separate from
+    /// `isLoading` so the stored secrets, which need nothing but the Keychain
+    /// and the Files folder, are on screen while gpg takes its time.
+    var isLoadingIndexed = false
     var showGenerateSheet = false
     var showImportSheet = false
     var showAddAPIKeySheet = false
@@ -37,6 +49,7 @@ final class KeyVaultViewModel {
     /// through `refreshVaultState()`, so it is current when it is read.
     var isBiometricsAvailable = false
     var showVaultSetup = false
+    var showChangePassphrase = false
     /// Whether the passphrase prompt is on screen. Raised at launch when the
     /// vault is locked, but it is a door you are allowed to walk away from:
     /// cancelling leaves the window open and locked rather than holding you
@@ -67,11 +80,22 @@ final class KeyVaultViewModel {
         clearLoadedSecrets()
     }
 
-    /// The idle lock. The screen clears exactly as it does for a real lock —
+    /// The idle lock, also used when the Mac sleeps, locks its screen or
+    /// switches user. The screen clears exactly as it does for a real lock —
     /// what differs is that the key is set aside rather than forgotten, so
     /// Touch ID can put it back. See `VaultCrypto.suspend()`.
+    ///
+    /// Only when Touch ID can actually be asked, though. The suspended key is
+    /// kept for one purpose, a fingerprint resume, and on a Mac without a
+    /// sensor or an enrolled finger nothing can ever use it: the locked screen
+    /// asks for the passphrase either way, while the key sat in memory for as
+    /// long as the app ran. There, this is a real lock.
     func idleLockVault() {
         guard !vaultIsLocked else { return }
+        guard BiometricAuth.isAvailable else {
+            lockVault()
+            return
+        }
         VaultCrypto.suspend()
         refreshVaultState()
         clearLoadedSecrets()
@@ -96,12 +120,55 @@ final class KeyVaultViewModel {
         }
     }
 
+    /// Re-encrypt the vault under a new passphrase. See `PassphraseChange`.
+    ///
+    /// Off the main thread — two key derivations and a write per item — and
+    /// with the result adopted back on it. Throws only when nothing changed;
+    /// once the change has taken effect it returns, and says so if some of it
+    /// is left for the next launch to finish.
+    func changePassphrase(from current: String, to new: String) async throws {
+        let files = fileStore.rekeying
+        let result = try await Task.detached {
+            try PassphraseChange.change(from: current, to: new,
+                                        backend: KeychainRekeyBackend(), files: files)
+        }.value
+        VaultCrypto.adoptChangedKey(result.key)
+        vaultDidUnlock()
+        await reload()
+        if !result.finished {
+            await appendError("The new passphrase is set, but some items could not be moved to it "
+                              + "yet and may not open. Quit and reopen KeyVault to finish.")
+        }
+    }
+
     /// Shutting the door has to empty the room as well. The rows carry names,
     /// services and categories in the clear, and leaving them in memory behind
     /// a locked screen is most of what locking was for.
     private func clearLoadedSecrets() {
         allKeys.removeAll { $0.type.isStored }
         selectedKeyID = nil
+        // A secret copied a moment before the lock would otherwise sit on
+        // the clipboard, readable by anything, for the rest of its 45 seconds.
+        if let copiedSecretChangeCount { clearCopiedSecret(ifStill: copiedSecretChangeCount) }
+        // What was typed is a fair guess at what is in the vault.
+        searchText = ""
+    }
+
+    /// The pasteboard's change count just after a secret was copied, while it
+    /// may still be there. See `KeyDetailView.copySecret()`.
+    @ObservationIgnored private var copiedSecretChangeCount: Int?
+
+    func secretWasCopied(changeCount: Int) {
+        copiedSecretChangeCount = changeCount
+    }
+
+    /// Clear the clipboard if it still holds the secret copied at `changeCount`
+    /// — and only then: whatever has been copied since is the user's.
+    func clearCopiedSecret(ifStill changeCount: Int) {
+        if NSPasteboard.general.changeCount == changeCount {
+            NSPasteboard.general.clearContents()
+        }
+        if copiedSecretChangeCount == changeCount { copiedSecretChangeCount = nil }
     }
 
     /// Whether the locked screen should offer a fingerprint. Both halves
@@ -140,6 +207,27 @@ final class KeyVaultViewModel {
     private let ageService = AgeService()
 
     init() {
+        // Before anything reads the salt: a passphrase change interrupted
+        // last time leaves it either side of its commit point, and which
+        // passphrase the unlock prompt should accept depends on settling it.
+        // Needs no key — it only moves bytes already sealed.
+        let notice: String?
+        switch PassphraseChange.recover(backend: KeychainRekeyBackend(), files: FileStore.standard.rekeying) {
+        case .nothingToDo:
+            notice = nil
+        case .rolledBack:
+            notice = "A passphrase change was interrupted before it took effect, and has "
+                + "been undone. Your previous passphrase still opens the vault."
+        case .completed:
+            notice = "A passphrase change was interrupted after it took effect, and has now "
+                + "been finished. Your new passphrase opens the vault."
+        case .unfinished:
+            notice = "A passphrase change was interrupted, and could not be finished yet. "
+                + "Your new passphrase opens the vault, but some items may not open until "
+                + "KeyVault has been quit and reopened."
+        }
+
+        self.launchNotice = notice
         self.settings = AppSettings.load()
         self.collapsedCategories = Set(
             UserDefaults.app.stringArray(forKey: Self.collapsedCategoriesKey) ?? []
@@ -153,12 +241,24 @@ final class KeyVaultViewModel {
             return TimeInterval(settings.idleLockMinutes * 60)
         }
         idleWatcher.onIdle = { [weak self] in self?.idleLockVault() }
+        idleWatcher.onAway = { [weak self] in self?.idleLockVault() }
         idleWatcher.start()
     }
 
     var filteredKeys: [EncryptionKey] {
-        guard let type = selectedType else { return allKeys }
-        return allKeys.filter { $0.type == type }
+        let ofType = selectedType.map { type in allKeys.filter { $0.type == type } } ?? allKeys
+        return ofType.filter { Self.key($0, matches: searchText) }
+    }
+
+    /// Whether a key matches a search: its name, service, category or notes
+    /// contain the query, compared the way Finder compares — ignoring case and
+    /// diacritics. Only what is already on screen in the clear is searched,
+    /// never a secret, which would mean decrypting every item per keystroke.
+    nonisolated static func key(_ key: EncryptionKey, matches query: String) -> Bool {
+        let query = query.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return true }
+        return [key.name, key.service, key.category, key.notes]
+            .contains { $0?.localizedStandardContains(query) == true }
     }
 
     var selectedKey: EncryptionKey? {
@@ -304,24 +404,26 @@ final class KeyVaultViewModel {
         idleWatcher.reset()
     }
 
-    /// Whether this launch has closed the ACLs an earlier build opened on
-    /// plaintext items. Once a launch is enough: nothing this build writes
-    /// opens one.
-    @ObservationIgnored private var didRestrictPlaintextAccess = false
+
+    /// Something launch found to say — a passphrase change it finished or
+    /// undid — held for the first reload, which is where errors are shown and
+    /// which clears whatever was there before.
+    @ObservationIgnored private var launchNotice: String?
+
+    /// Bumped by every reload, so one that is overtaken — Refresh pressed
+    /// while gpg is still answering the last — does not write its older
+    /// result over the newer one.
+    @ObservationIgnored private var reloadGeneration = 0
 
     func reload() async {
+        reloadGeneration += 1
+        let generation = reloadGeneration
         isLoading = true
         errorMessage = nil
 
-        // Plaintext needs no vault key, so this runs locked or not.
-        if !didRestrictPlaintextAccess {
-            didRestrictPlaintextAccess = true
-            let result = SecretStore.restrictPlaintextAccess()
-            if result.failed > 0 {
-                await appendError("\(result.failed) secret(s) stored as plain text are still open to "
-                                  + "every app on this Mac, which can read them without asking. "
-                                  + "Encrypting them under a master passphrase, in Settings, fixes that.")
-            }
+        if let launchNotice {
+            self.launchNotice = nil
+            await appendError(launchNotice)
         }
 
         async let sshKeys = loadSSH()
@@ -335,9 +437,20 @@ final class KeyVaultViewModel {
             stored = SecretStore.loadAll() + (await loadFiles())
         }
 
-        let (ssh, gpg, age) = await (sshKeys, gpgKeys, ageKeys)
-        allKeys = ssh + gpg + age + stored
+        // Shown now, beside whatever keys the last reload found, rather than
+        // after gpg has answered: the secrets are what the app opens on, and
+        // a slow or wedged gpg-agent used to hold all of them back.
+        allKeys = allKeys.filter { !$0.type.isStored } + stored
         isLoading = false
+        isLoadingIndexed = true
+
+        let (ssh, gpg, age) = await (sshKeys, gpgKeys, ageKeys)
+        guard generation == reloadGeneration else { return }
+        // The stored half is taken from what is on screen now, not from
+        // `stored` above: the vault may have locked while gpg was answering,
+        // and putting the secrets back behind the locked screen would undo it.
+        allKeys = ssh + gpg + age + allKeys.filter { $0.type.isStored }
+        isLoadingIndexed = false
     }
 
     private func loadSSH() async -> [EncryptionKey] {
@@ -624,6 +737,19 @@ final class KeyVaultViewModel {
         try await exportService.exportArchive(passphrase: passphrase)
     }
 
+    /// When an archive was last written out from this Mac. Recorded once the
+    /// file is saved, not when it is encrypted: an archive left in memory
+    /// because the save panel was cancelled is not a backup.
+    var lastBackupDate: Date? = UserDefaults.app.object(forKey: KeyVaultViewModel.lastBackupKey) as? Date
+
+    func recordBackup() {
+        let now = Date()
+        UserDefaults.app.set(now, forKey: Self.lastBackupKey)
+        lastBackupDate = now
+    }
+
+    private static let lastBackupKey = "LastBackupDate"
+
     func importVault(armored: String, passphrase: String) async throws -> (added: Int, updated: Int, skipped: Int) {
         let archive = try await exportService.readArchive(armored: armored, passphrase: passphrase)
         let counts = try await exportService.restore(archive)
@@ -652,7 +778,8 @@ final class KeyVaultViewModel {
         await reload()
     }
 
-    func saveSettings() {
+    func saveSettings(_ newSettings: AppSettings) {
+        settings = newSettings
         settings.save()
     }
 }

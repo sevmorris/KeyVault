@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Encrypted storage for whole files KeyVault holds outright — a password
@@ -42,6 +43,23 @@ struct FileStore {
     )
 
     let directory: URL
+
+    /// Where the key comes from. The app's store seals under the vault's
+    /// session key, and a store a test builds is handed one, so the format is
+    /// exercised end to end without a passphrase in the real Keychain.
+    enum Keying {
+        case vault
+        case fixed(SymmetricKey)
+    }
+
+    var keying: Keying = .vault
+
+    private func key() throws -> SymmetricKey {
+        switch keying {
+        case .vault: return try VaultCrypto.currentKey()
+        case .fixed(let key): return key
+        }
+    }
 
     /// Large enough for anything that belongs here — an export, a scan, a
     /// recovery kit — and small enough that the backup stays something you can
@@ -171,7 +189,18 @@ struct FileStore {
     /// read-back is the rule SecretStore's sweep learned the hard way: a write
     /// that reports success is not evidence that the thing is there.
     func save(_ key: EncryptionKey, contents: Data) throws {
-        guard VaultCrypto.isConfigured else { throw StoreError.needsPassphrase }
+        // Asked only of the vault's own key. `isConfigured` reads the salt
+        // from the real Keychain, which a store with a key of its own has no
+        // business touching.
+        if case .vault = keying {
+            guard VaultCrypto.isConfigured else { throw StoreError.needsPassphrase }
+        }
+        try write(key, contents: contents, to: url(for: key.id))
+    }
+
+    /// The write behind `save`, to any name in the folder: the item's own, or
+    /// the `.next` beside it that a passphrase change stages.
+    private func write(_ key: EncryptionKey, contents: Data, to destination: URL) throws {
         guard contents.count <= Self.maxFileSize else { throw StoreError.tooLarge(contents.count) }
 
         let header = Header(
@@ -188,7 +217,6 @@ struct FileStore {
         // has any business listing what the vault holds, or how much of it.
         try fm.createDirectory(at: directory, withIntermediateDirectories: true,
                                attributes: [.posixPermissions: 0o700])
-        let destination = url(for: key.id)
         let staging = directory.appending(path: ".\(key.id.uuidString).\(UUID().uuidString).partial")
         defer { try? fm.removeItem(at: staging) }
 
@@ -246,15 +274,17 @@ struct FileStore {
         let headerSize = try Self.checkPrefix(handle.read(upToCount: Self.prefixSize) ?? Data(), id: id)
         let sealed = try handle.read(upToCount: headerSize) ?? Data()
         guard sealed.count == headerSize else { throw StoreError.damaged }
-        return try Self.openHeader(sealed, id: id)
+        return try Self.openHeader(sealed, id: id, key: key())
     }
 
     private func open(_ blob: Data, id: UUID) throws -> (header: Header, contents: Data) {
         let headerSize = try Self.checkPrefix(blob.prefix(Self.prefixSize), id: id)
         guard blob.count >= Self.prefixSize + headerSize else { throw StoreError.damaged }
-        let header = try Self.openHeader(Data(blob.dropFirst(Self.prefixSize).prefix(headerSize)), id: id)
+        let key = try key()
+        let header = try Self.openHeader(Data(blob.dropFirst(Self.prefixSize).prefix(headerSize)),
+                                         id: id, key: key)
         let contents = try VaultCrypto.open(Data(blob.dropFirst(Self.prefixSize + headerSize)),
-                                            authenticating: Self.context(id, "body"))
+                                            authenticating: Self.context(id, "body"), using: key)
         // Belt and braces: the id already ties the body to this file, and this
         // ties it to the header it was written with.
         guard contents.count == header.fileSize else { throw StoreError.damaged }
@@ -264,9 +294,11 @@ struct FileStore {
     private func seal(_ header: Header, contents: Data, id: UUID) throws -> Data {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
+        let key = try key()
         let sealedHeader = try VaultCrypto.seal(encoder.encode(header),
-                                                authenticating: Self.context(id, "header"))
-        let sealedBody = try VaultCrypto.seal(contents, authenticating: Self.context(id, "body"))
+                                                authenticating: Self.context(id, "header"), using: key)
+        let sealedBody = try VaultCrypto.seal(contents, authenticating: Self.context(id, "body"),
+                                              using: key)
         let size = UInt32(sealedHeader.count)
         let sizeBytes = Data([24, 16, 8, 0].map { UInt8(truncatingIfNeeded: size >> $0) })
         return Self.magic + id.bytes + sizeBytes + sealedHeader + sealedBody
@@ -287,8 +319,8 @@ struct FileStore {
         return size
     }
 
-    private static func openHeader(_ sealed: Data, id: UUID) throws -> Header {
-        let json = try VaultCrypto.open(sealed, authenticating: context(id, "header"))
+    private static func openHeader(_ sealed: Data, id: UUID, key: SymmetricKey) throws -> Header {
+        let json = try VaultCrypto.open(sealed, authenticating: context(id, "header"), using: key)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         do {
@@ -304,9 +336,62 @@ struct FileStore {
     }
 }
 
-private extension UUID {
-    var bytes: Data { withUnsafeBytes(of: uuid) { Data($0) } }
+extension FileStore {
+    /// A passphrase change's view of the folder: every file read under the
+    /// old key and staged under the new, as `<id>.kvfile.next` beside the
+    /// original, then renamed over it once the change has committed. See
+    /// `PassphraseChange`. A `.next` is not a name `loadAll` lists, so a
+    /// staged copy is never mistaken for an item.
+    struct Rekeying {
+        let directory: URL
 
+        private static let stagedSuffix = ".\(FileStore.fileExtension).next"
+
+        func stageAll(from oldKey: SymmetricKey, to newKey: SymmetricKey) throws {
+            let source = FileStore(directory: directory, keying: .fixed(oldKey))
+            let target = FileStore(directory: directory, keying: .fixed(newKey))
+            let listing = source.loadAll()
+            guard listing.unreadable.isEmpty else {
+                throw PassphraseChange.ChangeError.unreadableFiles(listing.unreadable)
+            }
+            for file in listing.files {
+                try target.write(file, contents: source.loadContents(for: file.id),
+                                 to: stagedURL(for: file.id))
+            }
+        }
+
+        /// Rename each staged copy over its original. A rename within one
+        /// folder is atomic, so every file is wholly old or wholly new.
+        func promoteAll() throws {
+            for id in stagedIDs() {
+                let original = directory.appending(path: "\(id.uuidString).\(FileStore.fileExtension)")
+                guard rename(stagedURL(for: id).path, original.path) == 0 else {
+                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                }
+            }
+        }
+
+        func discardAll() {
+            for id in stagedIDs() { try? FileManager.default.removeItem(at: stagedURL(for: id)) }
+        }
+
+        func stagedIDs() -> [UUID] {
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+            return names.compactMap { name in
+                guard name.hasSuffix(Self.stagedSuffix) else { return nil }
+                return UUID(uuidString: String(name.dropLast(Self.stagedSuffix.count)))
+            }
+        }
+
+        private func stagedURL(for id: UUID) -> URL {
+            directory.appending(path: id.uuidString + Self.stagedSuffix)
+        }
+    }
+
+    var rekeying: Rekeying { Rekeying(directory: directory) }
+}
+
+private extension UUID {
     init?(bytes: Data) {
         guard bytes.count == 16 else { return nil }
         self = bytes.withUnsafeBytes { UUID(uuid: $0.loadUnaligned(as: uuid_t.self)) }
