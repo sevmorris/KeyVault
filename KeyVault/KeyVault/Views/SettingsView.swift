@@ -127,7 +127,7 @@ struct SettingsView: View {
                 } footer: {
                     Text(viewModel.isVaultConfigured
                          ? "Secrets are encrypted with your master passphrase before they are stored, so nothing else on this Mac can read them. The vault locks when left idle and whenever the Mac sleeps, locks its screen or switches user; Touch ID can reopen it then, on a Mac that has it. Lock Vault Now forgets the passphrase, so only typing it again will open the vault. Repair Keychain Access widens the Keychain permissions on every item, which stops macOS asking for your login password once per note after the app is rebuilt or re-signed."
-                         : "Without a master passphrase, notes and API keys are stored where any process running as you can read them. Setting one encrypts them before they are stored, and lets KeyVault store files, which it keeps only encrypted.")
+                         : "Without a master passphrase, notes and API keys are stored as plain text, and only the Keychain's permission prompt stands between them and other apps. Setting one encrypts them before they are stored, and lets KeyVault store files, which it keeps only encrypted.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

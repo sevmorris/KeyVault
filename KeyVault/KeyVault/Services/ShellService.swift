@@ -42,11 +42,15 @@ actor ShellService {
         signal(SIGPIPE, SIG_IGN)
     }()
 
+    /// `environment` is added to the app's own, not put in place of it: a
+    /// child given only what the caller named would lose HOME and PATH.
     func run(
         _ executable: String,
-        arguments: [String]
+        arguments: [String],
+        environment: [String: String] = [:]
     ) async throws -> (stdout: String, stderr: String, status: Int32) {
-        try await execute(executable, arguments: arguments, stdinData: nil)
+        try await execute(executable, arguments: arguments, stdinData: nil,
+                          environment: environment)
     }
 
     func runWithStdin(
@@ -54,13 +58,15 @@ actor ShellService {
         arguments: [String],
         stdinData: Data
     ) async throws -> (stdout: String, stderr: String, status: Int32) {
-        try await execute(executable, arguments: arguments, stdinData: stdinData)
+        try await execute(executable, arguments: arguments, stdinData: stdinData,
+                          environment: [:])
     }
 
     private func execute(
         _ executable: String,
         arguments: [String],
-        stdinData: Data?
+        stdinData: Data?,
+        environment: [String: String]
     ) async throws -> (stdout: String, stderr: String, status: Int32) {
         _ = Self.ignoreSIGPIPE
 
@@ -72,6 +78,10 @@ actor ShellService {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: executable)
             process.arguments = arguments
+            if !environment.isEmpty {
+                process.environment = ProcessInfo.processInfo.environment
+                    .merging(environment) { _, added in added }
+            }
 
             let stdoutPipe = Pipe()
             let stderrPipe = Pipe()

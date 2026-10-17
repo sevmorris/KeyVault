@@ -52,16 +52,15 @@ enum SecretStore {
 
     // MARK: - Keychain access
 
-    /// An access object trusting any application, applied to every item this
-    /// store writes.
+    /// An access object trusting any application, applied to every item whose
+    /// payload is ciphertext — and only to those. See `acl(forPayload:)`.
     ///
-    /// The payload is ciphertext. The Keychain ACL is therefore guarding bytes
-    /// that are useless without the master passphrase, while charging a
-    /// confirmation dialog per item whenever the asking binary's code identity
-    /// differs from the one that wrote it. That is not hypothetical: the
-    /// encryption sweep ran from a locally built copy, re-stamped all 22 items
-    /// with that identity, and the released build then had to ask for every one
-    /// of them during an export.
+    /// The Keychain ACL on such an item guards bytes that are useless without
+    /// the master passphrase, while charging a confirmation dialog per item
+    /// whenever the asking binary's code identity differs from the one that
+    /// wrote it. That is not hypothetical: the encryption sweep ran from a
+    /// locally built copy, re-stamped all 22 items with that identity, and the
+    /// released build then had to ask for every one of them during an export.
     ///
     /// Security here is the passphrase and a 600k-iteration KDF, not the ACL.
     ///
@@ -89,6 +88,27 @@ enum SecretStore {
         return access
     }
 
+    /// The Keychain's own default: given no list of trusted applications,
+    /// SecAccessCreate trusts the one calling it, and any other app that asks
+    /// for the item has to be allowed at a prompt.
+    private static func ownAccess() -> SecAccess? {
+        var access: SecAccess?
+        guard SecAccessCreate("KeyVault" as CFString, nil, &access) == errSecSuccess else { return nil }
+        return access
+    }
+
+    /// The ACL a payload calls for.
+    ///
+    /// Ciphertext is opened to any application: the passphrase protects it,
+    /// and the ACL would only add a dialog per item. Plain text is kept to
+    /// this app alone. Before a passphrase is set, the Keychain's prompt is the
+    /// only thing between a note and every other process running as you, and
+    /// every write used to open the ACL regardless — so in the state the app
+    /// starts in, any process could read every secret without being asked.
+    private static func acl(forPayload payload: Data) -> SecAccess? {
+        VaultCrypto.isEncrypted(payload) ? permissiveAccess() : ownAccess()
+    }
+
     // MARK: - Write
 
     static func save(_ key: EncryptionKey, secret: String) throws {
@@ -97,9 +117,10 @@ enum SecretStore {
         }
 
         var query = baseQuery(id: key.id)
-        query[kSecValueData] = try protectedPayload(secretData)
+        let payload = try protectedPayload(secretData)
+        query[kSecValueData] = payload
         query[kSecAttrAccessible] = kSecAttrAccessibleWhenUnlocked
-        if let access = permissiveAccess() { query[kSecAttrAccess] = access }
+        if let access = acl(forPayload: payload) { query[kSecAttrAccess] = access }
         attributes(for: key).forEach { query[$0.key] = $0.value }
 
         let status = SecItemAdd(query as CFDictionary, nil)
@@ -119,12 +140,16 @@ enum SecretStore {
             guard let data = newSecret.data(using: .utf8) else {
                 throw KeyError.keychainError(errSecParam)
             }
-            changes[kSecValueData] = try protectedPayload(data)
+            let payload = try protectedPayload(data)
+            changes[kSecValueData] = payload
+            // Editing an item written before the passphrase was set encrypts
+            // it on the way back down, so the vault protects itself as you
+            // touch it, and the ACL follows what is now stored.
+            if let access = acl(forPayload: payload) { changes[kSecAttrAccess] = access }
         }
-        // Editing an item written before the passphrase was set encrypts it on
-        // the way back down, so the vault protects itself as you touch it, and
-        // relaxes its ACL at the same time.
-        if let access = permissiveAccess() { changes[kSecAttrAccess] = access }
+        // A change to metadata alone leaves the ACL as it is. Which ACL is
+        // right depends on the payload, and reading the payload just to decide
+        // would make filing a note read the secret it holds.
 
         let status = SecItemUpdate(baseQuery(id: key.id) as CFDictionary,
                                    changes as CFDictionary)
@@ -175,8 +200,13 @@ enum SecretStore {
                 failed += 1
                 continue
             }
+            // Ciphertext now, so its ACL opens with it. Plain text was kept to
+            // this app alone, and left that way it would bring back a dialog
+            // per item whenever a differently signed build reads the vault.
+            var changes: [CFString: Any] = [kSecValueData: sealed]
+            if let access = permissiveAccess() { changes[kSecAttrAccess] = access }
             let status = SecItemUpdate(baseQuery(id: id) as CFDictionary,
-                                       [kSecValueData: sealed] as CFDictionary)
+                                       changes as CFDictionary)
             if status == errSecSuccess {
                 // Read back before counting it: this file has already shipped a
                 // sweep that trusted errSecSuccess and protected nothing.
@@ -199,6 +229,64 @@ enum SecretStore {
         guard let access = permissiveAccess() else { return }
         _ = SecItemUpdate(baseQuery(id: id) as CFDictionary,
                           [kSecAttrAccess: access] as CFDictionary)
+    }
+
+    /// Close the ACL on every plaintext item an earlier build opened to any
+    /// application, so other apps have to ask for it again.
+    ///
+    /// Run once a launch. Only items whose ACL is open are read at all, and
+    /// reading an open item never prompts; ciphertext among them is left
+    /// open, which is its intended state. Re-runnable, and cheap once there is
+    /// nothing left to close. Counted only once the ACL reads back closed,
+    /// because a Keychain write reporting success has fooled this file before.
+    @discardableResult
+    static func restrictPlaintextAccess() -> (restricted: Int, failed: Int) {
+        var restricted = 0, failed = 0
+        for id in allAccountIDs() where isOpenToAnyApplication(id: id) {
+            guard let blob = rawPayload(for: id) else { failed += 1; continue }
+            guard !VaultCrypto.isEncrypted(blob) else { continue }
+            guard let access = ownAccess(),
+                  SecItemUpdate(baseQuery(id: id) as CFDictionary,
+                                [kSecAttrAccess: access] as CFDictionary) == errSecSuccess,
+                  !isOpenToAnyApplication(id: id) else {
+                failed += 1
+                continue
+            }
+            restricted += 1
+        }
+        return (restricted, failed)
+    }
+
+    /// Whether any application may decrypt an item without being asked: the
+    /// NULL application list `permissiveAccess()` writes on its decrypt ACL.
+    /// Read from the item's access object, which prompts for nothing —
+    /// looking at an ACL is not reading the secret behind it.
+    private static func isOpenToAnyApplication(id: UUID) -> Bool {
+        var query = baseQuery(id: id)
+        query[kSecReturnRef] = true
+        query[kSecMatchLimit] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let result, CFGetTypeID(result) == SecKeychainItemGetTypeID() else { return false }
+
+        var access: SecAccess?
+        guard SecKeychainItemCopyAccess(result as! SecKeychainItem, &access) == errSecSuccess,
+              let access else { return false }
+        var aclList: CFArray?
+        guard SecAccessCopyACLList(access, &aclList) == errSecSuccess,
+              let acls = aclList as? [SecACL] else { return false }
+
+        let decrypt = kSecACLAuthorizationDecrypt as String
+        let any = kSecACLAuthorizationAny as String
+        return acls.contains { acl in
+            let authorizations = SecACLCopyAuthorizations(acl) as? [String] ?? []
+            guard authorizations.contains(decrypt) || authorizations.contains(any) else { return false }
+            var apps: CFArray?
+            var description: CFString?
+            var prompt = SecKeychainPromptSelector()
+            guard SecACLCopyContents(acl, &apps, &description, &prompt) == errSecSuccess else { return false }
+            return apps == nil
+        }
     }
 
     /// How many items are still stored as plaintext.
