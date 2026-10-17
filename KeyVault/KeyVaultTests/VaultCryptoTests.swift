@@ -1,10 +1,11 @@
 import CryptoKit
+import Security
 import XCTest
 @testable import KeyVault
 
 /// VaultCrypto's format, through the entry points that take a key. Nothing
-/// here may reach `configure`, `unlock` or `isConfigured`: they read and
-/// rewrite the vault's salt in the real login Keychain, and `configure`
+/// here may reach `configure`, `unlock`, `setup` or `isConfigured`: they read
+/// and rewrite the vault's salt in the real login Keychain, and `configure`
 /// replacing it would make every stored secret unreadable.
 final class VaultCryptoTests: XCTestCase {
 
@@ -136,6 +137,19 @@ final class VaultCryptoTests: XCTestCase {
         XCTAssertTrue(VaultCrypto.verifier(verifier, accepts: key))
         XCTAssertFalse(VaultCrypto.verifier(verifier, accepts: otherKey))
         XCTAssertFalse(VaultCrypto.verifier(Data("junk".utf8), accepts: key))
+    }
+
+    /// Only a salt that is not there means there is no vault. A login keychain
+    /// that is locked, a prompt refused, or any other failed read must not
+    /// read as one, or the app offers first-time setup over the real vault.
+    func testOnlyAMissingSaltMeansNoVault() {
+        XCTAssertEqual(VaultCrypto.classify(saltRead: errSecItemNotFound, data: nil), .notSet)
+        XCTAssertEqual(VaultCrypto.classify(saltRead: errSecSuccess, data: Data(count: 32)), .set)
+        for status in [errSecAuthFailed, errSecInteractionNotAllowed, errSecUserCanceled,
+                       errSecNotAvailable, errSecNoSuchKeychain] {
+            XCTAssertEqual(VaultCrypto.classify(saltRead: status, data: nil), .unreadable(status))
+        }
+        XCTAssertEqual(VaultCrypto.classify(saltRead: errSecSuccess, data: nil), .unreadable(errSecDecode))
     }
 
     /// The session entry points refuse while locked, rather than sealing

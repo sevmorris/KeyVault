@@ -39,6 +39,11 @@ final class KeyVaultViewModel {
     // VaultCrypto's state lives outside the observation system, so a computed
     // property would not re-render the gate when it changes.
     var isVaultConfigured = VaultCrypto.isConfigured
+    /// Set while the Keychain will not hand over the vault's salt — a locked
+    /// login keychain, typically. The vault then counts as configured and
+    /// locked, so nothing offers first-time setup over it, and the locked
+    /// screen says why no passphrase will open it.
+    var keychainFailure: OSStatus? = VaultCrypto.setup.failure
     var isVaultUnlocked = VaultCrypto.isUnlocked
     /// Whether the vault was shut by the idle timer rather than properly
     /// locked — the one state a fingerprint can reopen.
@@ -68,10 +73,26 @@ final class KeyVaultViewModel {
     var vaultIsLocked: Bool { isVaultConfigured && !isVaultUnlocked }
 
     func refreshVaultState() {
-        isVaultConfigured = VaultCrypto.isConfigured
+        let setup = VaultCrypto.setup
+        isVaultConfigured = setup != .notSet
+        keychainFailure = setup.failure
         isVaultUnlocked = VaultCrypto.isUnlocked
         isVaultSuspended = VaultCrypto.isSuspended
         isBiometricsAvailable = BiometricAuth.isAvailable
+    }
+
+    /// Ask the Keychain again, once the login keychain has been unlocked, and
+    /// put up the passphrase prompt if that is now the way in.
+    func retryKeychain() async {
+        refreshVaultState()
+        if keychainFailure == nil {
+            if recoveryDeferred {
+                recoveryDeferred = false
+                launchNotice = Self.recoverInterruptedChange()
+            }
+            if vaultIsLocked { showVaultUnlock = true }
+        }
+        await reload()
     }
 
     func lockVault() {
@@ -211,30 +232,22 @@ final class KeyVaultViewModel {
         // last time leaves it either side of its commit point, and which
         // passphrase the unlock prompt should accept depends on settling it.
         // Needs no key — it only moves bytes already sealed.
-        let notice: String?
-        switch PassphraseChange.recover(backend: KeychainRekeyBackend(), files: FileStore.standard.rekeying) {
-        case .nothingToDo:
-            notice = nil
-        case .rolledBack:
-            notice = "A passphrase change was interrupted before it took effect, and has "
-                + "been undone. Your previous passphrase still opens the vault."
-        case .completed:
-            notice = "A passphrase change was interrupted after it took effect, and has now "
-                + "been finished. Your new passphrase opens the vault."
-        case .unfinished:
-            notice = "A passphrase change was interrupted, and could not be finished yet. "
-                + "Your new passphrase opens the vault, but some items may not open until "
-                + "KeyVault has been quit and reopened."
-        }
-
-        self.launchNotice = notice
+        //
+        // Not while the Keychain will not answer, though. A pending record it
+        // will not hand over reads as none, and recovery would then throw away
+        // staged copies that a change past its commit point still needs. It
+        // waits for `retryKeychain` instead.
+        let setup = VaultCrypto.setup
+        self.recoveryDeferred = setup.failure != nil
+        self.launchNotice = setup.failure == nil ? KeyVaultViewModel.recoverInterruptedChange() : nil
         self.settings = AppSettings.load()
         self.collapsedCategories = Set(
             UserDefaults.app.stringArray(forKey: Self.collapsedCategoriesKey) ?? []
         )
         // Asked for once, at launch, rather than presented by a binding that
-        // re-raises it the instant it is dismissed.
-        self.showVaultUnlock = VaultCrypto.isConfigured && !VaultCrypto.isUnlocked
+        // re-raises it the instant it is dismissed. Not when the Keychain
+        // will not answer, where the prompt could only fail.
+        self.showVaultUnlock = setup == .set && !VaultCrypto.isUnlocked
 
         idleWatcher.idleLimit = { [weak self] in
             guard let self, settings.idleLockMinutes > 0 else { return nil }
@@ -244,6 +257,28 @@ final class KeyVaultViewModel {
         idleWatcher.onAway = { [weak self] in self?.idleLockVault() }
         idleWatcher.start()
     }
+
+    /// Settle a passphrase change stopped part way, and say what became of it.
+    private static func recoverInterruptedChange() -> String? {
+        switch PassphraseChange.recover(backend: KeychainRekeyBackend(), files: FileStore.standard.rekeying) {
+        case .nothingToDo:
+            return nil
+        case .rolledBack:
+            return "A passphrase change was interrupted before it took effect, and has "
+                + "been undone. Your previous passphrase still opens the vault."
+        case .completed:
+            return "A passphrase change was interrupted after it took effect, and has now "
+                + "been finished. Your new passphrase opens the vault."
+        case .unfinished:
+            return "A passphrase change was interrupted, and could not be finished yet. "
+                + "Your new passphrase opens the vault, but some items may not open until "
+                + "KeyVault has been quit and reopened."
+        }
+    }
+
+    /// Set when launch skipped that recovery because the Keychain would not
+    /// answer.
+    @ObservationIgnored private var recoveryDeferred = false
 
     var filteredKeys: [EncryptionKey] {
         let ofType = selectedType.map { type in allKeys.filter { $0.type == type } } ?? allKeys

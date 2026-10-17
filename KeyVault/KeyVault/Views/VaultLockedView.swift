@@ -18,8 +18,7 @@ struct VaultLockedView: View {
                 .font(.system(size: 48))
                 .foregroundStyle(.tertiary)
 
-            Text(viewModel.isVaultSuspended ? "Locked after a spell of inactivity"
-                                            : "KeyVault is locked")
+            Text(headline)
                 .font(.headline)
                 .foregroundStyle(.secondary)
 
@@ -34,7 +33,17 @@ struct VaultLockedView: View {
             // the vault was shut by the timer rather than properly locked. The
             // passphrase is always on the screen beside it, because it is the
             // only thing that opens a vault from cold.
-            if viewModel.canResumeWithBiometrics {
+            //
+            // Neither, while the Keychain will not hand over the salt: the
+            // prompt could only fail, and the way out is outside KeyVault.
+            if viewModel.keychainFailure != nil {
+                Button("Try Again") {
+                    Task { await viewModel.retryKeychain() }
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .padding(.top, 4)
+            } else if viewModel.canResumeWithBiometrics {
                 VStack(spacing: 6) {
                     Button {
                         authenticate()
@@ -80,7 +89,17 @@ struct VaultLockedView: View {
         authenticate()
     }
 
+    private var headline: String {
+        if viewModel.keychainFailure != nil { return "KeyVault can't read your keychain" }
+        return viewModel.isVaultSuspended ? "Locked after a spell of inactivity" : "KeyVault is locked"
+    }
+
     private var subtitle: String {
+        if let failure = viewModel.keychainFailure {
+            return "The login keychain is locked or refusing access, so the vault can't be "
+                + "opened. Unlock it in Keychain Access, or log out and back in, then try "
+                + "again. (Keychain error \(failure))"
+        }
         if viewModel.isVaultSuspended {
             return "Your notes, API keys and files are hidden until you unlock them again."
         }
