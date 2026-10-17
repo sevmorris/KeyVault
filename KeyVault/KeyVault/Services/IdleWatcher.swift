@@ -7,6 +7,12 @@ import Foundation
 /// cheapest thing to observe and the right definition: a local monitor sees
 /// nothing while you are working in another window, so switching away starts
 /// the clock, and coming back to KeyVault stops it.
+///
+/// It also notices the Mac itself being walked away from — sleep, the screen
+/// locking, a switch to another user — and reports that at once, through
+/// `onAway`, rather than waiting out the idle limit. Those are the moments
+/// someone is most plainly gone, and the idle clock can be minutes from
+/// noticing.
 @MainActor
 final class IdleWatcher {
     /// How long the app may go untouched, or nil for never. Asked on every
@@ -14,6 +20,10 @@ final class IdleWatcher {
     /// without the watcher having to be torn down and rebuilt.
     var idleLimit: () -> TimeInterval? = { nil }
     var onIdle: () -> Void = {}
+    /// Called when the Mac sleeps, locks its screen or switches user. Not
+    /// governed by `idleLimit`: "never lock when idle" is about leaving the
+    /// app open while you work elsewhere, not about leaving the Mac.
+    var onAway: () -> Void = {}
 
     /// Coarse on purpose. The question is whether someone walked away, and
     /// asking it four times a minute is precise enough for that while costing
@@ -27,6 +37,7 @@ final class IdleWatcher {
     /// a deinit runs once nothing else holds the watcher.
     nonisolated(unsafe) private var monitor: Any?
     nonisolated(unsafe) private var timer: Timer?
+    nonisolated(unsafe) private var awayObservers: [(NotificationCenter, NSObjectProtocol)] = []
     private var lastActivity = Date()
 
     func start() {
@@ -50,6 +61,25 @@ final class IdleWatcher {
         // at least a tenth of the interval. A lock measured in minutes cannot
         // tell three seconds late from on time.
         timer?.tolerance = Self.tick / 5
+
+        // Sleep and fast user switching are posted on the workspace's own
+        // centre, not the default one. A locked screen has no public
+        // notification at all; `com.apple.screenIsLocked` is the distributed
+        // one loginwindow posts, and what every other app that does this
+        // listens for. Delivered on the main queue, which is the main actor.
+        let workspace = NSWorkspace.shared.notificationCenter
+        let distributed = DistributedNotificationCenter.default()
+        let away: [(NotificationCenter, Notification.Name)] = [
+            (workspace, NSWorkspace.willSleepNotification),
+            (workspace, NSWorkspace.sessionDidResignActiveNotification),
+            (distributed, Notification.Name("com.apple.screenIsLocked")),
+        ]
+        awayObservers = away.map { center, name in
+            let token = center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.onAway() }
+            }
+            return (center, token)
+        }
     }
 
     /// Restart the countdown — after an unlock, so a vault just opened is not
@@ -67,5 +97,6 @@ final class IdleWatcher {
     deinit {
         timer?.invalidate()
         if let monitor { NSEvent.removeMonitor(monitor) }
+        for (center, token) in awayObservers { center.removeObserver(token) }
     }
 }

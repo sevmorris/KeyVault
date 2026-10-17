@@ -67,11 +67,22 @@ final class KeyVaultViewModel {
         clearLoadedSecrets()
     }
 
-    /// The idle lock. The screen clears exactly as it does for a real lock —
+    /// The idle lock, also used when the Mac sleeps, locks its screen or
+    /// switches user. The screen clears exactly as it does for a real lock —
     /// what differs is that the key is set aside rather than forgotten, so
     /// Touch ID can put it back. See `VaultCrypto.suspend()`.
+    ///
+    /// Only when Touch ID can actually be asked, though. The suspended key is
+    /// kept for one purpose, a fingerprint resume, and on a Mac without a
+    /// sensor or an enrolled finger nothing can ever use it: the locked screen
+    /// asks for the passphrase either way, while the key sat in memory for as
+    /// long as the app ran. There, this is a real lock.
     func idleLockVault() {
         guard !vaultIsLocked else { return }
+        guard BiometricAuth.isAvailable else {
+            lockVault()
+            return
+        }
         VaultCrypto.suspend()
         refreshVaultState()
         clearLoadedSecrets()
@@ -153,6 +164,7 @@ final class KeyVaultViewModel {
             return TimeInterval(settings.idleLockMinutes * 60)
         }
         idleWatcher.onIdle = { [weak self] in self?.idleLockVault() }
+        idleWatcher.onAway = { [weak self] in self?.idleLockVault() }
         idleWatcher.start()
     }
 
