@@ -10,13 +10,17 @@ import Foundation
 /// the vault could each pick a different binary, with different versions and
 /// potentially a different `~/.gnupg`.
 enum GPGLocator {
-    /// Apple-silicon Homebrew first, then Intel Homebrew, then anything the
-    /// system supplies.
+    /// Apple-silicon Homebrew first, then Intel Homebrew, then GPG Suite —
+    /// the other common way GnuPG reaches a Mac, which installs here and links
+    /// nothing into /usr/local/bin — then anything the system supplies.
     static let searchPaths = [
         "/opt/homebrew/bin/gpg",
         "/usr/local/bin/gpg",
+        "/usr/local/MacGPG2/bin/gpg",
         "/usr/bin/gpg"
     ]
+
+    static var isAvailable: Bool { (try? resolve()) != nil }
 
     static func resolve() throws -> String {
         guard let path = searchPaths.first(where: {

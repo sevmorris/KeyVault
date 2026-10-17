@@ -732,6 +732,19 @@ final class KeyVaultViewModel {
         try await exportService.exportArchive(passphrase: passphrase)
     }
 
+    /// When an archive was last written out from this Mac. Recorded once the
+    /// file is saved, not when it is encrypted: an archive left in memory
+    /// because the save panel was cancelled is not a backup.
+    var lastBackupDate: Date? = UserDefaults.app.object(forKey: KeyVaultViewModel.lastBackupKey) as? Date
+
+    func recordBackup() {
+        let now = Date()
+        UserDefaults.app.set(now, forKey: Self.lastBackupKey)
+        lastBackupDate = now
+    }
+
+    private static let lastBackupKey = "LastBackupDate"
+
     func importVault(armored: String, passphrase: String) async throws -> (added: Int, updated: Int, skipped: Int) {
         let archive = try await exportService.readArchive(armored: armored, passphrase: passphrase)
         let counts = try await exportService.restore(archive)

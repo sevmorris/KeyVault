@@ -18,12 +18,32 @@ struct BackupView: View {
     @State private var status: String?
     @State private var errorMessage: String?
     @State private var isImporting = false
+    /// Checked when the sheet opens, so a Mac without GnuPG hears why before
+    /// typing a passphrase twice, rather than from gpg's absence afterwards.
+    @State private var hasGPG = GPGLocator.isAvailable
+
+    private static let minimumExportPassphraseLength = VaultExportService.minimumPassphraseLength
 
     private var canExport: Bool {
-        !passphrase.isEmpty && passphrase == confirmation && !isWorking
+        hasGPG && passphrase.count >= Self.minimumExportPassphraseLength
+            && passphrase == confirmation && !isWorking
     }
     private var canRestore: Bool {
-        !passphrase.isEmpty && !isWorking
+        hasGPG && !passphrase.isEmpty && !isWorking
+    }
+
+    private var passphraseHint: String? {
+        if !passphrase.isEmpty && passphrase.count < Self.minimumExportPassphraseLength {
+            return "An export needs at least \(Self.minimumExportPassphraseLength) characters."
+        }
+        if !confirmation.isEmpty && passphrase != confirmation { return "The two do not match." }
+        return nil
+    }
+
+    /// Thirty days is when "last backup" stops being reassuring.
+    private var lastBackupIsStale: Bool {
+        guard let date = viewModel.lastBackupDate else { return true }
+        return date < Date.now.addingTimeInterval(-30 * 24 * 3600)
     }
 
     var body: some View {
@@ -33,9 +53,39 @@ struct BackupView: View {
                 .padding([.top, .horizontal])
 
             Form {
+                if !hasGPG {
+                    Section {
+                        Label {
+                            // One literal, so the backticks render as code.
+                            Text("Backup needs GnuPG, which is not installed. Install it with `brew install gnupg`, or GPG Suite, then reopen this sheet.")
+                        } icon: {
+                            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                        }
+                    }
+                }
+
+                Section {
+                    LabeledContent("Last backup") {
+                        Group {
+                            if let date = viewModel.lastBackupDate {
+                                Text(date, format: .relative(presentation: .named))
+                                    .help(date.formatted(date: .long, time: .shortened))
+                            } else {
+                                Text("None from this Mac")
+                            }
+                        }
+                        .foregroundStyle(lastBackupIsStale ? .orange : .secondary)
+                    }
+                }
+
                 Section {
                     SecureField("Passphrase", text: $passphrase)
                     SecureField("Confirm (export only)", text: $confirmation)
+                    if let passphraseHint {
+                        Text(passphraseHint)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 } header: {
                     Text("Passphrase")
                 } footer: {
@@ -84,7 +134,7 @@ struct BackupView: View {
             }
             .padding()
         }
-        .frame(width: 480, height: 460)
+        .frame(width: 480, height: 540)
         .fileImporter(
             isPresented: $isImporting,
             allowedContentTypes: [.plainText, .data],
@@ -101,6 +151,7 @@ struct BackupView: View {
                 let armored = try await viewModel.exportVault(passphrase: passphrase)
                 if let url = presentSavePanel() {
                     try armored.write(to: url, atomically: true, encoding: .utf8)
+                    viewModel.recordBackup()
                     status = "Exported to \(url.lastPathComponent). Restore it somewhere else before trusting it."
                 }
             } catch {

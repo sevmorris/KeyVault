@@ -473,6 +473,7 @@
     <h2>Encrypted Export</h2>
     <p>Notes live in the macOS Keychain: encrypted at rest, tied to your login. That protects them from other people. It does not protect them from a dead Mac, and Keychain items do not leave the machine they were made on.</p>
     <p><strong>Backup &amp; Restore</strong> — in the toolbar, or <kbd>⇧⌘B</kbd> — writes every stored secret and file to one passphrase-encrypted archive. It is OpenPGP, AES-256, ASCII-armored.</p>
+    <p>The archive's passphrase must be at least 12 characters: once the file is somewhere other than this Mac, nothing slows down an attempt to guess it. The sheet shows when this Mac last saved one, in orange once that is more than thirty days ago or has never happened, and says so up front if GnuPG is not installed — from Homebrew (<code>brew install gnupg</code>) or GPG Suite.</p>
     <p>Two properties are deliberate. It is <strong>plain text</strong>, so it survives a password manager field, an email to yourself, or a printer — none of which a binary blob does reliably. And it is <strong>readable without KeyVault</strong>:</p>
     <pre><code>gpg --decrypt keyvault-export.asc &gt; vault.json</code></pre>
     <p>Any GnuPG, on any platform, opens it. Inside is a JSON document with each value in the clear, carrying its own decryption instructions. That is the exit: this app is not somewhere your secrets can get stuck.</p>
@@ -513,7 +514,7 @@
     <h2>Requirements</h2>
     <ul>
       <li>macOS 15.0 or later</li>
-      <li><code>gnupg</code> for export and import — <code>brew install gnupg</code></li>
+      <li><code>gnupg</code> for export and import — <code>brew install gnupg</code>, or GPG Suite</li>
       <li><code>ssh-keygen</code> (ships with macOS) for SSH keys; <code>gpg</code> for GPG keys; <code>age-keygen</code> for Age</li>
     </ul>
     <p>The app sandbox is disabled, because it shells out to those tools.</p>

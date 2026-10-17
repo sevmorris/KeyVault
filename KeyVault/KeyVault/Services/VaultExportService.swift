@@ -18,6 +18,12 @@ actor VaultExportService {
     private let shell = ShellService()
     private let files: FileStore
 
+    /// For a new archive only. It leaves this Mac, and once it is somewhere
+    /// else nothing limits how fast its passphrase can be guessed, so it is
+    /// held to more than the master passphrase's 8. Restore takes whatever an
+    /// archive was made with: older ones predate the rule.
+    static let minimumPassphraseLength = 12
+
     init(files: FileStore = .standard) {
         self.files = files
     }
@@ -30,8 +36,8 @@ actor VaultExportService {
 
     /// Encrypt every stored secret and file to an armored OpenPGP document.
     func exportArchive(passphrase: String) async throws -> String {
-        guard !passphrase.isEmpty else {
-            throw KeyError.exportFailed("A passphrase is required.")
+        guard passphrase.count >= Self.minimumPassphraseLength else {
+            throw KeyError.exportFailed("The passphrase needs at least \(Self.minimumPassphraseLength) characters.")
         }
 
         let keys = SecretStore.loadAll()
