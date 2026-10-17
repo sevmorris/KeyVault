@@ -52,6 +52,9 @@ enum VaultCrypto {
     private static let saltAccount = "io.github.sevmorris.KeyVault.salt"
     private static let verifierAccount = "io.github.sevmorris.KeyVault.verifier"
     private static let verifierPlaintext = Data("KeyVault verifier v1".utf8)
+    /// A passphrase change in progress. See `PassphraseChange`.
+    private static let pendingSaltAccount = "io.github.sevmorris.KeyVault.salt.pending"
+    private static let pendingVerifierAccount = "io.github.sevmorris.KeyVault.verifier.pending"
 
     enum CryptoError: LocalizedError {
         case locked
@@ -235,6 +238,43 @@ enum VaultCrypto {
         return opened == verifierPlaintext
     }
 
+    // MARK: - Changing the passphrase
+
+    // The Keychain half of `PassphraseChange`, through `KeychainRekeyBackend`.
+    // The ordering that keeps a change safe to interrupt lives there.
+
+    static func vaultBlobs() -> (salt: Data, verifier: Data)? {
+        guard let salt = loadBlob(account: saltAccount),
+              let verifier = loadBlob(account: verifierAccount) else { return nil }
+        return (salt, verifier)
+    }
+
+    static func pendingBlobs() -> (salt: Data, verifier: Data)? {
+        guard let salt = loadBlob(account: pendingSaltAccount),
+              let verifier = loadBlob(account: pendingVerifierAccount) else { return nil }
+        return (salt, verifier)
+    }
+
+    /// Verifier first, salt last: `pendingBlobs` needs both, so a pending
+    /// record half written reads as none at all.
+    static func writePending(salt: Data, verifier: Data) throws {
+        try storeBlob(verifier, account: pendingVerifierAccount)
+        try storeBlob(salt, account: pendingSaltAccount)
+    }
+
+    /// Salt first, for the same reason.
+    static func deletePending() {
+        deleteBlob(account: pendingSaltAccount)
+        deleteBlob(account: pendingVerifierAccount)
+    }
+
+    static func updateSalt(_ salt: Data) throws { try updateBlob(salt, account: saltAccount) }
+    static func updateVerifier(_ verifier: Data) throws { try updateBlob(verifier, account: verifierAccount) }
+
+    /// After a change, the new key becomes the session key, so the vault
+    /// stays open under the passphrase just set.
+    static func adoptChangedKey(_ key: SymmetricKey) { adopt(key) }
+
     // MARK: - Encrypt / decrypt
 
     // Each operation comes twice: once under the session key, which is what
@@ -366,6 +406,31 @@ enum VaultCrypto {
         add[kSecAttrAccessible] = kSecAttrAccessibleWhenUnlocked
         let status = SecItemAdd(add as CFDictionary, nil)
         guard status == errSecSuccess else { throw CryptoError.keychain(status) }
+    }
+
+    /// In place, so the item is never absent. `storeBlob` deletes and adds,
+    /// which is fine for a first write and wrong for the salt of a vault that
+    /// already holds secrets.
+    private static func updateBlob(_ data: Data, account: String) throws {
+        let query: [CFString: Any] = [
+            kSecClass: kSecClassGenericPassword,
+            kSecAttrService: SecretStore.keychainService,
+            kSecAttrAccount: account,
+            kSecUseDataProtectionKeychain: false
+        ]
+        let status = SecItemUpdate(query as CFDictionary, [kSecValueData: data] as CFDictionary)
+        guard status == errSecSuccess else { throw CryptoError.keychain(status) }
+        guard loadBlob(account: account) == data else { throw CryptoError.keychain(errSecIO) }
+    }
+
+    private static func deleteBlob(account: String) {
+        let query: [CFString: Any] = [
+            kSecClass: kSecClassGenericPassword,
+            kSecAttrService: SecretStore.keychainService,
+            kSecAttrAccount: account,
+            kSecUseDataProtectionKeychain: false
+        ]
+        SecItemDelete(query as CFDictionary)
     }
 
     private static func loadBlob(account: String) -> Data? {

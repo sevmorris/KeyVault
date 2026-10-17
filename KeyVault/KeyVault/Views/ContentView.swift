@@ -62,6 +62,9 @@ struct ContentView: View {
                 viewModel.offerEncryptExisting = wasSetup
             }, onCancel: { viewModel.showVaultSetup = false })
         }
+        .sheet(isPresented: $viewModel.showChangePassphrase) {
+            ChangePassphraseView(viewModel: viewModel)
+        }
         .alert("Encrypt what is already stored?",
                isPresented: $viewModel.offerEncryptExisting) {
             Button("Encrypt Now") { Task { await viewModel.encryptExistingSecrets() } }

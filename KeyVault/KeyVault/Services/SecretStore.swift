@@ -323,6 +323,12 @@ enum SecretStore {
     /// VaultCrypto keeps alongside them are filtered out for free: their
     /// accounts are names, not UUIDs.
     private static func allAccountIDs() -> [UUID] {
+        allAccounts().compactMap(UUID.init(uuidString:))
+    }
+
+    /// Every account name under this service: the items, the salt and
+    /// verifier, and anything a passphrase change has staged.
+    private static func allAccounts() -> [String] {
         let query: [CFString: Any] = [
             kSecClass: kSecClassGenericPassword,
             kSecAttrService: keychainService,
@@ -336,9 +342,7 @@ enum SecretStore {
               let items = result as? [[CFString: Any]] else {
             return []
         }
-        return items.compactMap {
-            ($0[kSecAttrAccount] as? String).flatMap(UUID.init(uuidString:))
-        }
+        return items.compactMap { $0[kSecAttrAccount] as? String }
     }
 
     private static func rawPayload(for id: UUID) -> Data? {
@@ -517,5 +521,75 @@ enum SecretStore {
     private static func saveLegacyMetaDict(_ dict: [String: LegacyMeta]) {
         guard let data = try? JSONEncoder().encode(dict) else { return }
         UserDefaults.app.set(data, forKey: legacyMetaDefaultsKey)
+    }
+}
+
+// MARK: - Re-keying
+
+/// What `PassphraseChange` needs from the Keychain's items. A staged payload is
+/// a separate item under the same service, its account the item's id with
+/// `.next` appended — not a UUID, so `loadAll`, the export and every sweep
+/// pass over it as they pass over the salt.
+extension SecretStore {
+    private static let stagedSuffix = ".next"
+
+    static func rekeyableIDs() -> [UUID] { allAccountIDs() }
+
+    static func rekeyPayload(for id: UUID) -> Data? { rawPayload(for: id) }
+
+    private static func stagedQuery(id: UUID) -> [CFString: Any] {
+        var query = baseQuery(id: id)
+        query[kSecAttrAccount] = id.uuidString + stagedSuffix
+        return query
+    }
+
+    /// Ciphertext, so opened to any application like every other ciphertext
+    /// item; see `permissiveAccess()`. Replaces a staged copy already there.
+    static func stage(_ payload: Data, for id: UUID) throws {
+        SecItemDelete(stagedQuery(id: id) as CFDictionary)
+        var add = stagedQuery(id: id)
+        add[kSecValueData] = payload
+        add[kSecAttrAccessible] = kSecAttrAccessibleWhenUnlocked
+        if let access = permissiveAccess() { add[kSecAttrAccess] = access }
+        let status = SecItemAdd(add as CFDictionary, nil)
+        guard status == errSecSuccess else { throw KeyError.keychainError(status) }
+    }
+
+    static func stagedIDs() -> [UUID] {
+        allAccounts().compactMap { account in
+            guard account.hasSuffix(stagedSuffix) else { return nil }
+            return UUID(uuidString: String(account.dropLast(stagedSuffix.count)))
+        }
+    }
+
+    static func stagedPayload(for id: UUID) -> Data? {
+        var query = stagedQuery(id: id)
+        query[kSecReturnData] = true
+        query[kSecMatchLimit] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess else { return nil }
+        return result as? Data
+    }
+
+    /// The item's payload replaced by the staged one in a single update,
+    /// which leaves its name, metadata and ACL as they were. The staged copy
+    /// goes only once the item reads back with it.
+    static func promoteStaged(for id: UUID) throws {
+        guard let staged = stagedPayload(for: id) else { return }
+        let status = SecItemUpdate(baseQuery(id: id) as CFDictionary,
+                                   [kSecValueData: staged] as CFDictionary)
+        switch status {
+        case errSecSuccess:
+            guard rawPayload(for: id) == staged else { throw KeyError.keychainError(errSecIO) }
+        case errSecItemNotFound:
+            break
+        default:
+            throw KeyError.keychainError(status)
+        }
+        discardStaged(for: id)
+    }
+
+    static func discardStaged(for id: UUID) {
+        SecItemDelete(stagedQuery(id: id) as CFDictionary)
     }
 }

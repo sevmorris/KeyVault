@@ -195,6 +195,12 @@ struct FileStore {
         if case .vault = keying {
             guard VaultCrypto.isConfigured else { throw StoreError.needsPassphrase }
         }
+        try write(key, contents: contents, to: url(for: key.id))
+    }
+
+    /// The write behind `save`, to any name in the folder: the item's own, or
+    /// the `.next` beside it that a passphrase change stages.
+    private func write(_ key: EncryptionKey, contents: Data, to destination: URL) throws {
         guard contents.count <= Self.maxFileSize else { throw StoreError.tooLarge(contents.count) }
 
         let header = Header(
@@ -211,7 +217,6 @@ struct FileStore {
         // has any business listing what the vault holds, or how much of it.
         try fm.createDirectory(at: directory, withIntermediateDirectories: true,
                                attributes: [.posixPermissions: 0o700])
-        let destination = url(for: key.id)
         let staging = directory.appending(path: ".\(key.id.uuidString).\(UUID().uuidString).partial")
         defer { try? fm.removeItem(at: staging) }
 
@@ -329,6 +334,61 @@ struct FileStore {
     private static func context(_ id: UUID, _ part: String) -> Data {
         magic + id.bytes + Data(part.utf8)
     }
+}
+
+extension FileStore {
+    /// A passphrase change's view of the folder: every file read under the
+    /// old key and staged under the new, as `<id>.kvfile.next` beside the
+    /// original, then renamed over it once the change has committed. See
+    /// `PassphraseChange`. A `.next` is not a name `loadAll` lists, so a
+    /// staged copy is never mistaken for an item.
+    struct Rekeying {
+        let directory: URL
+
+        private static let stagedSuffix = ".\(FileStore.fileExtension).next"
+
+        func stageAll(from oldKey: SymmetricKey, to newKey: SymmetricKey) throws {
+            let source = FileStore(directory: directory, keying: .fixed(oldKey))
+            let target = FileStore(directory: directory, keying: .fixed(newKey))
+            let listing = source.loadAll()
+            guard listing.unreadable.isEmpty else {
+                throw PassphraseChange.ChangeError.unreadableFiles(listing.unreadable)
+            }
+            for file in listing.files {
+                try target.write(file, contents: source.loadContents(for: file.id),
+                                 to: stagedURL(for: file.id))
+            }
+        }
+
+        /// Rename each staged copy over its original. A rename within one
+        /// folder is atomic, so every file is wholly old or wholly new.
+        func promoteAll() throws {
+            for id in stagedIDs() {
+                let original = directory.appending(path: "\(id.uuidString).\(FileStore.fileExtension)")
+                guard rename(stagedURL(for: id).path, original.path) == 0 else {
+                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                }
+            }
+        }
+
+        func discardAll() {
+            for id in stagedIDs() { try? FileManager.default.removeItem(at: stagedURL(for: id)) }
+        }
+
+        func stagedIDs() -> [UUID] {
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+            return names.compactMap { name in
+                guard name.hasSuffix(Self.stagedSuffix) else { return nil }
+                return UUID(uuidString: String(name.dropLast(Self.stagedSuffix.count)))
+            }
+        }
+
+        private func stagedURL(for id: UUID) -> URL {
+            directory.appending(path: id.uuidString + Self.stagedSuffix)
+        }
+    }
+
+    var rekeying: Rekeying { Rekeying(directory: directory) }
 }
 
 private extension UUID {

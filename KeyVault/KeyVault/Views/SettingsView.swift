@@ -110,6 +110,10 @@ struct SettingsView: View {
                                 viewModel.showVaultUnlock = true
                             }
                         } else {
+                            Button("Change Passphrase…") {
+                                dismiss()
+                                viewModel.showChangePassphrase = true
+                            }
                             Button("Lock Vault Now") {
                                 viewModel.lockVault()
                                 dismiss()

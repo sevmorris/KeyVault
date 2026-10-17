@@ -45,6 +45,7 @@ final class KeyVaultViewModel {
     /// through `refreshVaultState()`, so it is current when it is read.
     var isBiometricsAvailable = false
     var showVaultSetup = false
+    var showChangePassphrase = false
     /// Whether the passphrase prompt is on screen. Raised at launch when the
     /// vault is locked, but it is a door you are allowed to walk away from:
     /// cancelling leaves the window open and locked rather than holding you
@@ -115,6 +116,27 @@ final class KeyVaultViewModel {
         }
     }
 
+    /// Re-encrypt the vault under a new passphrase. See `PassphraseChange`.
+    ///
+    /// Off the main thread — two key derivations and a write per item — and
+    /// with the result adopted back on it. Throws only when nothing changed;
+    /// once the change has taken effect it returns, and says so if some of it
+    /// is left for the next launch to finish.
+    func changePassphrase(from current: String, to new: String) async throws {
+        let files = fileStore.rekeying
+        let result = try await Task.detached {
+            try PassphraseChange.change(from: current, to: new,
+                                        backend: KeychainRekeyBackend(), files: files)
+        }.value
+        VaultCrypto.adoptChangedKey(result.key)
+        vaultDidUnlock()
+        await reload()
+        if !result.finished {
+            await appendError("The new passphrase is set, but some items could not be moved to it "
+                              + "yet and may not open. Quit and reopen KeyVault to finish.")
+        }
+    }
+
     /// Shutting the door has to empty the room as well. The rows carry names,
     /// services and categories in the clear, and leaving them in memory behind
     /// a locked screen is most of what locking was for.
@@ -161,6 +183,27 @@ final class KeyVaultViewModel {
     private let ageService = AgeService()
 
     init() {
+        // Before anything reads the salt: a passphrase change interrupted
+        // last time leaves it either side of its commit point, and which
+        // passphrase the unlock prompt should accept depends on settling it.
+        // Needs no key — it only moves bytes already sealed.
+        let notice: String?
+        switch PassphraseChange.recover(backend: KeychainRekeyBackend(), files: FileStore.standard.rekeying) {
+        case .nothingToDo:
+            notice = nil
+        case .rolledBack:
+            notice = "A passphrase change was interrupted before it took effect, and has "
+                + "been undone. Your previous passphrase still opens the vault."
+        case .completed:
+            notice = "A passphrase change was interrupted after it took effect, and has now "
+                + "been finished. Your new passphrase opens the vault."
+        case .unfinished:
+            notice = "A passphrase change was interrupted, and could not be finished yet. "
+                + "Your new passphrase opens the vault, but some items may not open until "
+                + "KeyVault has been quit and reopened."
+        }
+
+        self.launchNotice = notice
         self.settings = AppSettings.load()
         self.collapsedCategories = Set(
             UserDefaults.app.stringArray(forKey: Self.collapsedCategoriesKey) ?? []
@@ -342,9 +385,19 @@ final class KeyVaultViewModel {
     /// opens one.
     @ObservationIgnored private var didRestrictPlaintextAccess = false
 
+    /// Something launch found to say — a passphrase change it finished or
+    /// undid — held for the first reload, which is where errors are shown and
+    /// which clears whatever was there before.
+    @ObservationIgnored private var launchNotice: String?
+
     func reload() async {
         isLoading = true
         errorMessage = nil
+
+        if let launchNotice {
+            self.launchNotice = nil
+            await appendError(launchNotice)
+        }
 
         // Plaintext needs no vault key, so this runs locked or not.
         if !didRestrictPlaintextAccess {
