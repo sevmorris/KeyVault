@@ -95,7 +95,8 @@ actor VaultExportService {
         encoder.dateEncodingStrategy = .iso8601
         let plaintext = try encoder.encode(archive)
 
-        return try await encrypt(plaintext, passphrase: passphrase)
+        // Composed, as the master passphrase is; see VaultCrypto.normalized.
+        return try await encrypt(plaintext, passphrase: VaultCrypto.normalized(passphrase))
     }
 
     private func encrypt(_ plaintext: Data, passphrase: String) async throws -> String {
@@ -130,11 +131,28 @@ actor VaultExportService {
 
     /// Decrypt and parse an archive. Returns its items without writing
     /// anything — deciding what to do with a collision is the caller's job.
+    ///
+    /// The passphrase is tried composed first, then as typed when that
+    /// differs: archives written before export normalised it were encrypted
+    /// with the bytes as typed.
     func readArchive(armored: String, passphrase: String) async throws -> VaultArchive {
-        let gpg = try gpgPath()
         guard let ciphertext = armored.data(using: .utf8) else {
             throw KeyError.exportFailed("Archive is not valid text.")
         }
+        for candidate in VaultCrypto.candidates(for: passphrase) {
+            do {
+                return try await decrypt(ciphertext, passphrase: candidate)
+            } catch is WrongPassphrase {
+                continue
+            }
+        }
+        throw KeyError.exportFailed("Wrong passphrase.")
+    }
+
+    private struct WrongPassphrase: Error {}
+
+    private func decrypt(_ ciphertext: Data, passphrase: String) async throws -> VaultArchive {
+        let gpg = try gpgPath()
         let passFile = try writeTemporaryPassphraseFile(passphrase)
         defer { try? FileManager.default.removeItem(at: passFile.dir) }
 
@@ -146,15 +164,20 @@ actor VaultExportService {
                 "--passphrase-file", passFile.file.path,
                 "--decrypt"
             ],
-            stdinData: ciphertext
+            stdinData: ciphertext,
+            // The wrong-passphrase check below reads gpg's messages, and a
+            // gpg built with translations — GPG Suite's is; Homebrew's is
+            // not — writes them in the Mac's language, so a mistyped
+            // passphrase came back as a raw gpg error. LANGUAGE is emptied as
+            // well, since gettext consults it ahead of the locale.
+            environment: Self.untranslated
         )
 
         guard result.status == 0, let data = result.stdout.data(using: .utf8) else {
-            throw KeyError.exportFailed(
-                result.stderr.contains("Bad session key") || result.stderr.contains("decryption failed")
-                    ? "Wrong passphrase."
-                    : (result.stderr.isEmpty ? "gpg failed" : result.stderr)
-            )
+            if result.stderr.contains("Bad session key") || result.stderr.contains("decryption failed") {
+                throw WrongPassphrase()
+            }
+            throw KeyError.exportFailed(result.stderr.isEmpty ? "gpg failed" : result.stderr)
         }
 
         return try Self.decodeArchive(data)
@@ -300,6 +323,8 @@ actor VaultExportService {
     }
 
     // MARK: - Helpers
+
+    static let untranslated = ["LC_ALL": "C", "LANGUAGE": ""]
 
     private func writeTemporaryPassphraseFile(_ passphrase: String) throws -> (dir: URL, file: URL) {
         let dir = FileManager.default.temporaryDirectory

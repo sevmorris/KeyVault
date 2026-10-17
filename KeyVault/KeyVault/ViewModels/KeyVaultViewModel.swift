@@ -147,8 +147,28 @@ final class KeyVaultViewModel {
     private func clearLoadedSecrets() {
         allKeys.removeAll { $0.type.isStored }
         selectedKeyID = nil
+        // A secret copied a moment before the lock would otherwise sit on
+        // the clipboard, readable by anything, for the rest of its 45 seconds.
+        if let copiedSecretChangeCount { clearCopiedSecret(ifStill: copiedSecretChangeCount) }
         // What was typed is a fair guess at what is in the vault.
         searchText = ""
+    }
+
+    /// The pasteboard's change count just after a secret was copied, while it
+    /// may still be there. See `KeyDetailView.copySecret()`.
+    @ObservationIgnored private var copiedSecretChangeCount: Int?
+
+    func secretWasCopied(changeCount: Int) {
+        copiedSecretChangeCount = changeCount
+    }
+
+    /// Clear the clipboard if it still holds the secret copied at `changeCount`
+    /// — and only then: whatever has been copied since is the user's.
+    func clearCopiedSecret(ifStill changeCount: Int) {
+        if NSPasteboard.general.changeCount == changeCount {
+            NSPasteboard.general.clearContents()
+        }
+        if copiedSecretChangeCount == changeCount { copiedSecretChangeCount = nil }
     }
 
     /// Whether the locked screen should offer a fingerprint. Both halves

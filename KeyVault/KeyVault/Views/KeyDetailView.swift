@@ -207,6 +207,11 @@ struct KeyDetailView: View {
         // than not offering copy at all.
         pb.setString("", forType: .init("org.nspasteboard.ConcealedType"))
         pb.setString(secret, forType: .string)
+        // Recognised later by the pasteboard's change count, not by holding a
+        // copy of the secret to compare: the count changes with every copy,
+        // so if it still matches, nothing has been copied since.
+        let copied = pb.changeCount
+        viewModel.secretWasCopied(changeCount: copied)
 
         copiedSecret = true
         Task {
@@ -220,9 +225,7 @@ struct KeyDetailView: View {
             // — stomping on whatever the user copied since would be its own
             // small betrayal.
             try? await Task.sleep(for: .seconds(43))
-            if NSPasteboard.general.string(forType: .string) == secret {
-                NSPasteboard.general.clearContents()
-            }
+            viewModel.clearCopiedSecret(ifStill: copied)
         }
     }
 

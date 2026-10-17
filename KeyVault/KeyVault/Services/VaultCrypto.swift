@@ -201,7 +201,7 @@ enum VaultCrypto {
         }
         guard ok else { throw CryptoError.keychain(errSecAllocate) }
 
-        let key = try derive(passphrase: passphrase, salt: salt)
+        let key = try derive(passphrase: normalized(passphrase), salt: salt)
         let verifier = try makeVerifier(using: key)
 
         try storeBlob(salt, account: saltAccount)
@@ -217,10 +217,42 @@ enum VaultCrypto {
               let verifier = loadBlob(account: verifierAccount) else {
             throw CryptoError.locked
         }
-        let key = try derive(passphrase: passphrase, salt: salt)
-        guard Self.verifier(verifier, accepts: key) else { return false }
+        guard let key = try key(for: passphrase, salt: salt, verifier: verifier) else { return false }
         adopt(key)
         return true
+    }
+
+    /// The same passphrase can arrive as different bytes: "é" is one code
+    /// point from most keyboards and two — "e" and a combining accent — from
+    /// some input methods and from text pasted out of some documents. The
+    /// derivation sees bytes, so the vault would open from one Mac and not
+    /// another. Every passphrase is therefore set in Unicode's composed form
+    /// (NFC), which is what macOS keyboards already type.
+    static func normalized(_ passphrase: String) -> String {
+        passphrase.precomposedStringWithCanonicalMapping
+    }
+
+    /// What to try when checking a passphrase: the composed form, then — only
+    /// when it differs — the bytes as typed, which is how a vault set before
+    /// passphrases were normalised was derived. Without the second, a vault
+    /// set from a decomposed passphrase would stop opening.
+    static func candidates(for passphrase: String) -> [String] {
+        let composed = normalized(passphrase)
+        // Compared as bytes. Swift's `==` on strings is canonical
+        // equivalence, under which the two forms are equal by definition —
+        // that comparison would never offer the second.
+        return composed.utf8.elementsEqual(passphrase.utf8) ? [composed] : [composed, passphrase]
+    }
+
+    /// The key a passphrase derives, if the verifier accepts it in either
+    /// form. Internal for `PassphraseChange`, which checks the current
+    /// passphrase the same way.
+    static func key(for passphrase: String, salt: Data, verifier: Data) throws -> SymmetricKey? {
+        for candidate in candidates(for: passphrase) {
+            let key = try derive(passphrase: candidate, salt: salt)
+            if Self.verifier(verifier, accepts: key) { return key }
+        }
+        return nil
     }
 
     /// The verifier for a key: a known plaintext sealed under it, which only

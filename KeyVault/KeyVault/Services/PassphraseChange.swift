@@ -122,13 +122,13 @@ enum PassphraseChange {
         _ = recover(backend: backend, files: files)
 
         guard let vault = backend.vaultBlobs() else { throw ChangeError.notConfigured }
-        let oldKey = try VaultCrypto.derive(passphrase: current, salt: vault.salt)
-        guard VaultCrypto.verifier(vault.verifier, accepts: oldKey) else {
+        guard let oldKey = try VaultCrypto.key(for: current, salt: vault.salt,
+                                               verifier: vault.verifier) else {
             throw VaultCrypto.CryptoError.wrongPassphrase
         }
 
         let salt = try newSalt ?? randomSalt()
-        let newKey = try VaultCrypto.derive(passphrase: new, salt: salt)
+        let newKey = try VaultCrypto.derive(passphrase: VaultCrypto.normalized(new), salt: salt)
         let verifier = try VaultCrypto.makeVerifier(using: newKey)
 
         // 1. Stage. Any failure here leaves the vault exactly as it was.

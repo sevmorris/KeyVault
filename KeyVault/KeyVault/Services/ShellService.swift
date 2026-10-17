@@ -79,10 +79,11 @@ actor ShellService {
         _ executable: String,
         arguments: [String],
         stdinData: Data,
+        environment: [String: String] = [:],
         timeout: TimeInterval = defaultTimeout
     ) async throws -> (stdout: String, stderr: String, status: Int32) {
         try await execute(executable, arguments: arguments, stdinData: stdinData,
-                          environment: [:], timeout: timeout)
+                          environment: environment, timeout: timeout)
     }
 
     private func execute(

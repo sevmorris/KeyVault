@@ -23,6 +23,26 @@ final class VaultCryptoTests: XCTestCase {
         XCTAssertEqual(hex, "b915fe8618c779195a061f4aceae83671cdab2d999eae300ddb2dad92b9f56f5")
     }
 
+    /// "café" typed as one code point or as "e" plus a combining accent
+    /// derives the same key once composed — the answer here was computed from
+    /// the composed form outside KeyVault.
+    func testBothFormsOfAnAccentDeriveTheSameKeyOnceComposed() throws {
+        let composed = "caf\u{E9}", decomposed = "cafe\u{301}"
+        XCTAssertNotEqual(Array(composed.utf8), Array(decomposed.utf8))
+        for form in [composed, decomposed] {
+            let key = try VaultCrypto.derive(passphrase: VaultCrypto.normalized(form), salt: Data(count: 32))
+            let hex = key.withUnsafeBytes { $0.map { String(format: "%02x", $0) }.joined() }
+            XCTAssertEqual(hex, "d9ec0f3f1d43d4c77071aa14b579009fa4dbc78cd067d6845858f59491213044")
+        }
+    }
+
+    /// A passphrase set before normalisation is still tried as typed.
+    func testCandidatesKeepTheTypedFormWhenItDiffers() {
+        XCTAssertEqual(VaultCrypto.candidates(for: "plain ascii"), ["plain ascii"])
+        XCTAssertEqual(VaultCrypto.candidates(for: "cafe\u{301}").map { Array($0.unicodeScalars) },
+                       [Array("caf\u{E9}".unicodeScalars), Array("cafe\u{301}".unicodeScalars)])
+    }
+
     func testTextRoundTrips() throws {
         let sealed = try VaultCrypto.encrypt("hunter2 — ünïcödé", for: id, using: key)
         XCTAssertEqual(try VaultCrypto.decrypt(sealed, for: id, using: key), "hunter2 — ünïcödé")
