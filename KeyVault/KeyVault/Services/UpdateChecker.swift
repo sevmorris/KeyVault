@@ -142,6 +142,8 @@ actor UpdateChecker {
 /// is available.
 @MainActor @discardableResult
 func checkForUpdates(silent: Bool = false) async -> AvailableUpdate? {
+    if SelfUpdateFlow.bringForward() { return nil }
+
     let result = await UpdateChecker.shared.check()
 
     switch result {
@@ -156,18 +158,9 @@ func checkForUpdates(silent: Bool = false) async -> AvailableUpdate? {
 
     case .available(let version, let downloadURL, let releaseURL):
         let update = AvailableUpdate(version: version, downloadURL: downloadURL, releaseURL: releaseURL)
-        let alert = NSAlert()
-        alert.messageText = "Update Available"
-        alert.informativeText = "KeyVault \(version) is available."
-        alert.addButton(withTitle: "Download")
-        alert.addButton(withTitle: "Release Notes")
-        alert.addButton(withTitle: "Not Now")
-        let response = alert.runModal()
-        if response == .alertFirstButtonReturn {
-            NSWorkspace.shared.open(downloadURL)
-        } else if response == .alertSecondButtonReturn {
-            NSWorkspace.shared.open(releaseURL)
-        }
+        await SelfUpdateFlow.offer(SelfUpdatePrompt(appName: "KeyVault", version: version,
+                                                    downloadURL: downloadURL, releaseURL: releaseURL),
+                                   silent: silent)
         return update
 
     case .needsNewerMacOS(let version, let minimum, let installed):
