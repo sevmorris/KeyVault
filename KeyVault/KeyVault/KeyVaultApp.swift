@@ -65,6 +65,10 @@ struct KeyVaultApp: App {
     /// the sidebar toolbar.
     @State private var viewModel = KeyVaultViewModel()
 
+    /// Here, not in AppLauncher, so a test host never installs its quit
+    /// handler. See AppQuit.swift.
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
     var body: some Scene {
         WindowGroup {
             ContentView(viewModel: viewModel)
@@ -122,6 +126,13 @@ struct KeyVaultApp: App {
                 Button("Check for Updates…") {
                     Task { await checkForUpdates(silent: false) }
                 }
+            }
+
+            // AppKit's own Quit is refused while a sheet is open, and the
+            // passphrase prompt is one at launch. See AppQuit.swift.
+            CommandGroup(replacing: .appTermination) {
+                Button("Quit KeyVault") { AppQuit.quit() }
+                    .keyboardShortcut("q", modifiers: .command)
             }
 
             CommandGroup(replacing: .appSettings) {
