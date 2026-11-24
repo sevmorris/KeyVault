@@ -52,9 +52,25 @@ extension UserDefaults {
     /// while Apple documents it as thread-safe; the reference is set once and
     /// never reassigned.
     nonisolated(unsafe) static let app: UserDefaults = AppLauncher.isHostingTests
-        ? UserDefaults(suiteName: FileManager.default.temporaryDirectory
-            .appendingPathComponent("io.github.sevmorris.KeyVault.tests").path)!
+        ? scratchForTests()
         : .standard
+
+    /// The test run's scratch suite, empty at the start of every run.
+    ///
+    /// Its file outlives the run, at the same path each time, and a suite named
+    /// by a path keeps reading the values its file held when it was loaded:
+    /// setting or removing such a key reaches the file but not `data(forKey:)`
+    /// (macOS 27.2, 2026-11-23). AppSettingsTests clear their key as they
+    /// finish, so the file is normally empty; but a run stopped part-way leaves
+    /// a saved AppSettings behind, and every later run would read that one
+    /// whatever the tests save. Deleting the file before the suite first reads
+    /// it starts every run clean, as on a CI runner.
+    private static func scratchForTests() -> UserDefaults {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("io.github.sevmorris.KeyVault.tests").path
+        try? FileManager.default.removeItem(atPath: path + ".plist")
+        return UserDefaults(suiteName: path)!
+    }
 }
 
 struct KeyVaultApp: App {
